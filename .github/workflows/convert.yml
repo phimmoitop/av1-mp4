@@ -35,21 +35,22 @@ jobs:
 
       - name: Convert AV1 to H264 (keyframe 6s + skip bad frames)
         run: |
-          mkdir output
+          mkdir -p output
 
-          # Fix: lấy biến qua shell, tránh GitHub parse sai
           OUT="${{ github.event.inputs.output_filename }}.mp4"
-
-          echo "Output file = $OUT"
+          echo "Output file: $OUT"
 
           ffmpeg -y \
             -fflags +discardcorrupt \
-            -err_detect ignore_err -xerror 0 \
+            -err_detect ignore_err \
             -i input.mp4 \
-            -c:v libx264 -preset veryfast -crf 22 \
+            -c:v libx264 \
+            -preset veryfast \
+            -crf 22 \
             -pix_fmt yuv420p \
             -force_key_frames "expr:gte(t,n_forced*6)" \
-            -c:a aac -b:a 128k \
+            -c:a aac \
+            -b:a 128k \
             "output/$OUT"
 
           ls -lh output
