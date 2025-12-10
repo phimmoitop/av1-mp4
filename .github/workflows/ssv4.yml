@@ -1,4 +1,4 @@
-name: Convert AV1 to H264 v3
+name: Convert AV1 to H264 v4
 
 on:
   workflow_dispatch:
@@ -23,6 +23,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install curl (container does not include curl)
+        run: |
+          apt-get update
+          apt-get install -y curl
 
       - name: Prepare folders
         run: |
@@ -59,7 +64,7 @@ jobs:
           git add encoded/*
           git commit -m "Add encoded output"
           git push
-        continue-on-error: true   # tránh fail nếu không có thay đổi mới
+        continue-on-error: true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
