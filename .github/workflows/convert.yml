@@ -1,4 +1,4 @@
-name: Convert AV1 to H264
+name: Convert AV1 to H264 v1
 
 on:
   workflow_dispatch:
@@ -33,11 +33,16 @@ jobs:
           curl -L "${{ github.event.inputs.video_url }}" -o input.mp4
           ls -lh input.mp4
 
-      - name: Convert AV1 to H264
+      - name: Convert AV1 to H264 (keyframe 6s + skip bad frames)
         run: |
           mkdir output
-          ffmpeg -y -i input.mp4 \
+          ffmpeg -y \
+            -fflags +discardcorrupt \
+            -err_detect ignore_err -xerror 0 \
+            -i input.mp4 \
             -c:v libx264 -preset veryfast -crf 22 \
+            -pix_fmt yuv420p \
+            -force_key_frames "expr:gte(t,n_forced*6)" \
             -c:a aac -b:a 128k \
             "output/${{ github.event.inputs.output_filename }}"
           ls -lh output
