@@ -1,0 +1,63 @@
+name: Encode AV1 to H264 (Keyframe 6s)
+run-name: Encode with fixed keyframe interval
+
+on:
+  workflow_dispatch:
+    inputs:
+      input_file:
+        description: "Uploaded AV1 video file name"
+        required: true
+      crf:
+        description: "Quality (default 23)"
+        required: false
+        default: "23"
+      keyframe:
+        description: "Keyframe interval (seconds, default 6)"
+        required: false
+        default: "6"
+
+jobs:
+  encode:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt update
+          sudo apt install -y ffmpeg
+
+      - name: Download input file
+        uses: actions/download-artifact@v3
+        with:
+          name: input
+          path: .
+
+      - name: Encode AV1 → H264 with fixed keyframes
+        run: |
+          INPUT="${{ github.event.inputs.input_file }}"
+          CRF="${{ github.event.inputs.crf }}"
+          KF="${{ github.event.inputs.keyframe }}"
+
+          echo "Encoding $INPUT -> output.mp4"
+          echo "CRF = $CRF, Keyframe every = ${KF}s"
+
+          ffmpeg \
+            -fflags +discardcorrupt \
+            -err_detect ignore_err -xerror 0 \
+            -i "$INPUT" \
+            -c:v libx264 \
+            -preset slow \
+            -crf $CRF \
+            -pix_fmt yuv420p \
+            -force_key_frames "expr:gte(t,n_forced*$KF)" \
+            -c:a aac -b:a 128k \
+            output.mp4
+
+      - name: Upload encoded MP4
+        uses: actions/upload-artifact@v3
+        with:
+          name: encoded_mp4
+          path: output.mp4
