@@ -4,90 +4,46 @@ on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: "Direct URL to AV1 MP4 (http/https)"
+        description: "Direct URL to AV1 MP4"
         required: true
         type: string
       output_filename:
-        description: "Optional output filename (without path). Default: converted_h264.mp4"
+        description: "Output filename"
         required: false
         default: "converted_h264.mp4"
-      ffmpeg_preset:
-        description: "libx264 preset (ultrafast, superfast, veryfast, medium, slow). Default: veryfast"
-        required: false
-        default: "veryfast"
+        type: string
 
 jobs:
   convert:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
 
     steps:
-      - name: Checkout (no code required, but nice to have)
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show runner info
+      - name: Install FFmpeg
         run: |
-          echo "Runner: $(uname -a)"
-          lscpu
-          free -h
-
-      - name: Install dependencies (curl)
-        run: sudo apt-get update && sudo apt-get install -y curl
-
-      - name: Install FFmpeg (apt)
-        run: |
+          sudo apt-get update
           sudo apt-get install -y ffmpeg
           ffmpeg -version
 
-      - name: Verify FFmpeg AV1 decoder support
-        id: checkav1
+      - name: Download video
         run: |
-          ffmpeg -decoders | sed -n '1,200p' | grep av1 || true
-          if ffmpeg -decoders | grep -i av1; then
-            echo "has_av1=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_av1=false" >> $GITHUB_OUTPUT
-          fi
+          echo "Downloading: ${{ github.event.inputs.video_url }}"
+          curl -L "${{ github.event.inputs.video_url }}" -o input.mp4
+          ls -lh input.mp4
 
-      - name: Download input video
-        if: steps.checkav1.outputs.has_av1 == 'true'
+      - name: Convert AV1 to H264
         run: |
-          URL="${{ github.event.inputs.video_url }}"
-          echo "Downloading $URL"
-          # follow redirects and limit download time to avoid runaway jobs
-          curl -L --max-time 600 --retry 3 -o input.mp4 "$URL"
-          ls -lh input.mp4 || true
-
-      - name: Fallback: download + use static ffmpeg build (if no AV1 support)
-        if: steps.checkav1.outputs.has_av1 == 'false'
-        run: |
-          echo "Runner's ffmpeg lacks AV1 support. Downloading input and attempting to use a static ffmpeg binary..."
-          curl -L --max-time 600 --retry 3 -o input.mp4 "${{ github.event.inputs.video_url }}"
-          ls -lh input.mp4 || true
-          # Try to download a static ffmpeg that includes dav1d; user may need to adjust the URL if GitHub runner blocks
-          # Note: If download fails you need to provide a static ffmpeg binary URL that includes libdav1d.
-          # Example: (user must replace with a valid static build URL if required)
-          echo "If conversion fails due to missing decoder, get a static ffmpeg build that includes libdav1d."
-
-      - name: Convert AV1 -> H264
-        run: |
-          OUTDIR=output
-          mkdir -p $OUTDIR
-          OUTNAME="${{ github.event.inputs.output_filename }}"
-          PRESET="${{ github.event.inputs.ffmpeg_preset }}"
-          echo "Converting input.mp4 -> $OUTDIR/$OUTNAME using preset $PRESET"
-          ffmpeg -hide_banner -y -loglevel info -i input.mp4 \
-            -c:v libx264 -preset "$PRESET" -crf 22 \
+          mkdir output
+          ffmpeg -y -i input.mp4 \
+            -c:v libx264 -preset veryfast -crf 22 \
             -c:a aac -b:a 128k \
-            "$OUTDIR/$OUTNAME"
+            "output/${{ github.event.inputs.output_filename }}"
+          ls -lh output
 
-      - name: Show output file info
-        run: |
-          ls -lh output || true
-          ffprobe -v error -show_format -show_streams output/${{ github.event.inputs.output_filename }} || true
-
-      - name: Upload converted file as artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: converted_h264
+          name: converted_video
           path: output/${{ github.event.inputs.output_filename }}
