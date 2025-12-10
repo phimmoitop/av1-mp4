@@ -1,0 +1,76 @@
+name: Convert AV1 to H264 v5
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: "Direct URL to AV1 MP4"
+        required: true
+        type: string
+      output_filename:
+        description: "Output name (no extension)"
+        required: false
+        default: "converted_h264"
+        type: string
+
+permissions:
+  contents: write   # QUYỀN BẮT BUỘC ĐỂ ĐƯỢC PUSH VÀO REPO
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+
+    container:
+      image: jrottenberg/ffmpeg:6.0-ubuntu
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Install curl + git (container does NOT include them)
+        run: |
+          apt-get update
+          apt-get install -y curl git
+
+      - name: Prepare output folder
+        run: mkdir -p encoded
+
+      - name: Download input video
+        run: |
+          echo "Downloading: ${{ github.event.inputs.video_url }}"
+          curl -L "${{ github.event.inputs.video_url }}" -o input.mp4
+          ls -lh input.mp4
+
+      - name: Convert AV1 to H264 (target ~200MB)
+        run: |
+          OUT="${{ github.event.inputs.output_filename }}.mp4"
+          echo "Encoding to: $OUT"
+
+          ffmpeg -y \
+            -fflags +discardcorrupt \
+            -err_detect ignore_err \
+            -i input.mp4 \
+            -c:v libx264 -preset fast \
+            -b:v 3000k -maxrate 3000k -bufsize 6000k \
+            -pix_fmt yuv420p \
+            -force_key_frames "expr:gte(t,n_forced*6)" \
+            -c:a aac -b:a 96k \
+            "encoded/$OUT"
+
+          ls -lh encoded/
+
+      - name: Commit to repo phimmoitop/av1-mp4
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "actions@github.com"
+
+          git add encoded/
+          git commit -m "Add encoded output: ${{ github.event.inputs.output_filename }}"
+          git push origin HEAD:main
+        continue-on-error: false
+
+      - name: Upload video as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: encoded_video
+          path: encoded/
