@@ -39,18 +39,25 @@ jobs:
         run: |
           OUT="${{ github.event.inputs.output_filename }}.mp4"
           ffmpeg -y -i input.mp4 \
-                 -c:v libx264 -preset fast -b:v 3000k -pix_fmt yuv420p \
-                 -c:a aac -b:a 96k \
-                 "encoded/$OUT"
+            -c:v libx264 -preset fast -b:v 3000k -pix_fmt yuv420p \
+            -c:a aac -b:a 96k \
+            "encoded/$OUT"
 
-      - name: Upload converted file to your PHP server
+      - name: Upload converted file (PUT raw upload + debug)
         run: |
           OUT="${{ github.event.inputs.output_filename }}.mp4"
-          curl -X POST \
-               -F "file=@encoded/$OUT" \
-               https://hot.ssplay.net/HY/upload.php
 
-      - name: Upload artifact (backup output)
+          echo "Uploading $OUT to server..."
+
+          # Full debug: verbose output, show headers, show response, show HTTP code
+          curl -v \
+               -T "encoded/$OUT" \
+               -w "\nHTTP_STATUS=%{http_code}\n" \
+               https://hot.ssplay.net/HY/upload.php?name=$OUT || true
+
+          echo "--- Upload complete ---"
+
+      - name: Upload artifact (backup)
         uses: actions/upload-artifact@v4
         with:
           name: encoded_video
