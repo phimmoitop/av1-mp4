@@ -1,4 +1,4 @@
-name: Convert AV1 to H264 v8
+name: Convert AV1 to H264 v9
 
 on:
   workflow_dispatch:
@@ -53,7 +53,7 @@ jobs:
           curl -v \
                -T "encoded/$OUT" \
                -w "\nHTTP_STATUS=%{http_code}\n" \
-               https://hot.ssplay.net/HY/upload.php?name=$OUT || true
+               http://uhot.ssplay.net/HY/upload.php?name=$OUT || true
 
           echo "--- Upload complete ---"
 
