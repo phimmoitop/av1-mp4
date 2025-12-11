@@ -35,13 +35,18 @@ jobs:
         run: |
           curl -L "${{ github.event.inputs.video_url }}" -o input.mp4
 
-        - name: Convert AV1 → H264
+      - name: Convert AV1 → H264
         run: |
           OUT="${{ github.event.inputs.output_filename }}.mp4"
+          # -r 25: Ép frame rate về 25fps (để khớp với công thức bên dưới)
+          # -g 250: Keyframe mỗi 250 frames (25fps * 10s = 250)
+          # -keyint_min 250: Đảm bảo khoảng cách tối thiểu cũng là 250 (cố định cứng)
+          # -sc_threshold 0: Tắt phát hiện chuyển cảnh để không sinh keyframe rác
+          
           ffmpeg -y -i input.mp4 \
             -c:v libx264 -preset fast -b:v 3000k -pix_fmt yuv420p \
+            -r 25 \
             -g 250 -keyint_min 250 -sc_threshold 0 \
-            -force_key_frames "expr:gte(t,n_forced*10)" \
             -c:a aac -b:a 96k \
             "encoded/$OUT"
 
