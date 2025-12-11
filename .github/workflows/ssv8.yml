@@ -1,4 +1,4 @@
-name: Convert AV1 to H264 v10
+name: Convert AV1 to H264 v11
 
 on:
   workflow_dispatch:
@@ -26,7 +26,6 @@ jobs:
         run: |
           apt-get update
           apt-get install -y curl
-        # shell left default
 
       - name: Prepare output folder
         run: |
@@ -36,55 +35,27 @@ jobs:
         run: |
           curl -L "${{ github.event.inputs.video_url }}" -o input.mp4
 
-      - name: Show ffmpeg info (debug)
+      - name: Convert AV1 → H264
         run: |
-          echo "ffmpeg version and configuration:"
-          ffmpeg -version
-          echo "ffprobe version:"
-          ffprobe -version
-
-      - name: Convert AV1 → H264 (force 10s keyframes)
-        # use bash so quoting for force_key_frames is reliable
-        shell: bash
-        run: |
-          set -x
-
           OUT="${{ github.event.inputs.output_filename }}.mp4"
-          echo "Output file will be: encoded/$OUT"
-
-          # optional: detect fps and compute g = fps * 10 (fallback to 25fps -> g=250)
-          FPS=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=nw=1:nk=1 input.mp4 || echo "25/1")
-          # convert fract like 30000/1001 to float ~=30, we take integer fps_rounded
-          FPS_FLOAT=$(python3 - <<PY
-import sys, fractions
-s = sys.argv[1]
-try:
-    f = float(fractions.Fraction(s))
-except Exception:
-    f = 25.0
-print(int(round(f)))
-PY
-          "$FPS")
-          if [[ -z "$FPS_FLOAT" ]]; then
-            FPS_FLOAT=25
-          fi
-          GVAL=$((FPS_FLOAT * 10))
-          echo "Detected FPS (rounded): $FPS_FLOAT, setting -g $GVAL (≈10s GOP)"
-
-          # Re-encode forcing keyframes every 10s and disabling scene cuts
-          ffmpeg -y -hide_banner -loglevel info -i input.mp4 \
+          ffmpeg -y -i input.mp4 \
             -c:v libx264 -preset fast -b:v 3000k -pix_fmt yuv420p \
-            -g ${GVAL} -keyint_min ${GVAL} -sc_threshold 0 \
-            -force_key_frames 'expr:gte(t,n_forced*10)' \
+            -force_key_frames "expr:gte(t,n_forced*10)" \
             -c:a aac -b:a 96k \
             "encoded/$OUT"
 
       - name: Upload converted file (PUT raw upload + debug)
-        shell: bash
         run: |
           OUT="${{ github.event.inputs.output_filename }}.mp4"
+
           echo "Uploading $OUT to server..."
-          curl -v -T "encoded/$OUT" -w "\nHTTP_STATUS=%{http_code}\n" http://uhot.ssplay.net/HY/upload.php?name=$OUT || true
+
+          # Full debug: verbose output, show headers, show response, show HTTP code
+          curl -v \
+               -T "encoded/$OUT" \
+               -w "\nHTTP_STATUS=%{http_code}\n" \
+               http://uhot.ssplay.net/HY/upload.php?name=$OUT || true
+
           echo "--- Upload complete ---"
 
       - name: Upload artifact (backup)
