@@ -35,16 +35,15 @@ jobs:
         run: |
           curl -L "${{ github.event.inputs.video_url }}" -o input.mp4
 
-      - name: Convert AV1 → H264
-        run: |
-          OUT="${{ github.event.inputs.output_filename }}.mp4"
-          ffmpeg -y -i input.mp4 \
-  -c:v libx264 -preset fast -b:v 3000k -pix_fmt yuv420p \
-  -g 250 -keyint_min 250 \
-  -force_key_frames "expr:gte(t,n_forced*10)" \
-  -sc_threshold 0 \
-  -c:a aac -b:a 96k \
-  "encoded/$OUT"
+ - name: Convert AV1 → H264 (force 10s keyframes)
+  run: |
+    OUT="${{ github.event.inputs.output_filename }}.mp4"
+    ffmpeg -y -i input.mp4 \
+      -c:v libx264 -preset fast -b:v 3000k -pix_fmt yuv420p \
+      -g 250 -keyint_min 250 -sc_threshold 0 \
+      -force_key_frames 'expr:gte(t,n_forced*10)' \
+      -c:a aac -b:a 96k \
+      "encoded/$OUT"
 
       - name: Upload converted file (PUT raw upload + debug)
         run: |
