@@ -1,0 +1,21 @@
+<?php
+
+$targetDir = "/www/wwwroot/hot.ssplay.net/HY/video/";
+
+if (!is_dir($targetDir)) {
+    mkdir($targetDir, 0777, true);
+}
+
+if (!isset($_FILES["file"])) {
+    echo "No file uploaded.";
+    exit;
+}
+
+$filename = basename($_FILES["file"]["name"]);
+$targetFile = $targetDir . $filename;
+
+if (move_uploaded_file($_FILES["file"]["tmp_name"], $targetFile)) {
+    echo "Uploaded OK: $filename";
+} else {
+    echo "Upload failed.";
+}
