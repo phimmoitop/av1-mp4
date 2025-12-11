@@ -35,6 +35,8 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
 
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+          
           git init
 
           git remote add origin https://github.com/${GITHUB_REPOSITORY}.git
@@ -43,7 +45,7 @@ jobs:
 
           git checkout -B main origin/main
 
-          git config --global --add safe.directory $GITHUB_WORKSPACE
+          
 
       - name: Prepare output folder
         run: |
