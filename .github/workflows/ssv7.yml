@@ -1,4 +1,4 @@
-name: Convert AV1 to H264 v6
+name: Convert AV1 to H264 v7
 
 on:
   workflow_dispatch:
@@ -26,22 +26,24 @@ jobs:
 
     steps:
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Install curl & git
         run: |
           apt-get update
           apt-get install -y curl git
 
-      - name: Fix safe directory
+      - name: Re-create .git manually (fix checkout inside container)
         run: |
-          git config --global --add safe.directory $GITHUB_WORKSPACE
+          cd $GITHUB_WORKSPACE
 
-      - name: Move to workspace
-        run: cd $GITHUB_WORKSPACE
+          git init
+
+          git remote add origin https://github.com/${GITHUB_REPOSITORY}.git
+
+          git fetch origin main
+
+          git checkout -B main origin/main
+
+          git config --global --add safe.directory $GITHUB_WORKSPACE
 
       - name: Prepare output folder
         run: |
@@ -51,29 +53,15 @@ jobs:
       - name: Download input video
         run: |
           cd $GITHUB_WORKSPACE
-          echo "Downloading: ${{ github.event.inputs.video_url }}"
           curl -L "${{ github.event.inputs.video_url }}" -o input.mp4
-          ls -lh input.mp4
 
       - name: Convert AV1 → H264
         run: |
           cd $GITHUB_WORKSPACE
           OUT="${{ github.event.inputs.output_filename }}.mp4"
+          ffmpeg -y -i input.mp4 -c:v libx264 -preset fast -b:v 3000k -pix_fmt yuv420p -c:a aac -b:a 96k "encoded/$OUT"
 
-          ffmpeg -y \
-            -fflags +discardcorrupt \
-            -err_detect ignore_err \
-            -i input.mp4 \
-            -c:v libx264 -preset fast \
-            -b:v 3000k -maxrate 3000k -bufsize 6000k \
-            -pix_fmt yuv420p \
-            -force_key_frames "expr:gte(t,n_forced*10)" \
-            -c:a aac -b:a 96k \
-            "encoded/$OUT"
-
-          ls -lh encoded/
-
-      - name: Commit output to repo
+      - name: Commit and Push
         run: |
           cd $GITHUB_WORKSPACE
 
@@ -81,8 +69,7 @@ jobs:
           git config user.email "actions@github.com"
 
           git add encoded/
-
-          git commit -m "Add encoded output: ${{ github.event.inputs.output_filename }}" || echo "No changes to commit"
+          git commit -m "Add encoded output: ${{ github.event.inputs.output_filename }}" || echo "No changes"
 
           git push origin main
 
@@ -90,4 +77,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: encoded_video
-          path: encoded/
+          path: ${{ github.workspace }}/encoded/
