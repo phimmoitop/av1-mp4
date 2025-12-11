@@ -1,21 +1,57 @@
-<?php
+name: Convert AV1 to H264 v8
 
-$targetDir = "/www/wwwroot/hot.ssplay.net/HY/video/";
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: "Direct URL to AV1 MP4"
+        required: true
+        type: string
+      output_filename:
+        description: "Output name (no extension)"
+        required: false
+        default: "converted_h264"
+        type: string
 
-if (!is_dir($targetDir)) {
-    mkdir($targetDir, 0777, true);
-}
+jobs:
+  convert:
+    runs-on: ubuntu-latest
 
-if (!isset($_FILES["file"])) {
-    echo "No file uploaded.";
-    exit;
-}
+    container:
+      image: jrottenberg/ffmpeg:6.0-ubuntu
 
-$filename = basename($_FILES["file"]["name"]);
-$targetFile = $targetDir . $filename;
+    steps:
 
-if (move_uploaded_file($_FILES["file"]["tmp_name"], $targetFile)) {
-    echo "Uploaded OK: $filename";
-} else {
-    echo "Upload failed.";
-}
+      - name: Install curl
+        run: |
+          apt-get update
+          apt-get install -y curl
+
+      - name: Prepare output folder
+        run: |
+          mkdir -p encoded
+
+      - name: Download input video
+        run: |
+          curl -L "${{ github.event.inputs.video_url }}" -o input.mp4
+
+      - name: Convert AV1 → H264
+        run: |
+          OUT="${{ github.event.inputs.output_filename }}.mp4"
+          ffmpeg -y -i input.mp4 \
+                 -c:v libx264 -preset fast -b:v 3000k -pix_fmt yuv420p \
+                 -c:a aac -b:a 96k \
+                 "encoded/$OUT"
+
+      - name: Upload converted file to your PHP server
+        run: |
+          OUT="${{ github.event.inputs.output_filename }}.mp4"
+          curl -X POST \
+               -F "file=@encoded/$OUT" \
+               https://hot.ssplay.net/HY/upload.php
+
+      - name: Upload artifact (backup output)
+        uses: actions/upload-artifact@v4
+        with:
+          name: encoded_video
+          path: encoded/
