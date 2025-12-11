@@ -1,4 +1,4 @@
-name: Convert AV1 to H264 v11
+name: Convert AV1 to H264 v11 (Fix Corrupt)
 
 on:
   workflow_dispatch:
@@ -21,7 +21,6 @@ jobs:
       image: jrottenberg/ffmpeg:6.0-ubuntu
 
     steps:
-
       - name: Install curl
         run: |
           apt-get update
@@ -31,36 +30,50 @@ jobs:
         run: |
           mkdir -p encoded
 
-      - name: Download input video
+      - name: Download input video (Robust)
         run: |
-          curl -L "${{ github.event.inputs.video_url }}" -o input.mp4
+          # Thêm retry 5 lần, mỗi lần cách nhau 5s nếu mạng lỗi
+          # -C - : Cho phép resume nếu server hỗ trợ
+          echo "Downloading: ${{ github.event.inputs.video_url }}"
+          curl -L --retry 5 --retry-delay 5 --fail \
+               "${{ github.event.inputs.video_url }}" -o input.mp4
 
-      - name: Convert AV1 → H264
+      - name: Convert AV1 → H264 (Error Resilient)
         run: |
           OUT="${{ github.event.inputs.output_filename }}.mp4"
-          # -r 25: Ép frame rate về 25fps (để khớp với công thức bên dưới)
-          # -g 250: Keyframe mỗi 250 frames (25fps * 10s = 250)
-          # -keyint_min 250: Đảm bảo khoảng cách tối thiểu cũng là 250 (cố định cứng)
-          # -sc_threshold 0: Tắt phát hiện chuyển cảnh để không sinh keyframe rác
           
-          ffmpeg -y -i input.mp4 \
+          # CÁC THAY ĐỔI ĐỂ FIX LỖI:
+          # -err_detect ignore_err: Bỏ qua lỗi giải mã thay vì dừng lại
+          # -ignore_unknown: Bỏ qua các stream lạ
+          # -fflags +genpts: Tự sinh lại timestamp nếu file gốc bị mất
+          # -max_muxing_queue_size 9999: Tránh lỗi buffer khi audio/video lệch nhau do file lỗi
+          
+          ffmpeg -y \
+            -err_detect ignore_err -ignore_unknown -fflags +genpts \
+            -i input.mp4 \
             -c:v libx264 -preset fast -b:v 3000k -pix_fmt yuv420p \
             -r 25 \
             -g 250 -keyint_min 250 -sc_threshold 0 \
             -c:a aac -b:a 96k \
+            -max_muxing_queue_size 9999 \
             "encoded/$OUT"
 
-      - name: Upload converted file (PUT raw upload + debug)
+      - name: Upload converted file
         run: |
           OUT="${{ github.event.inputs.output_filename }}.mp4"
 
-          echo "Uploading $OUT to server..."
+          # Kiểm tra nếu file output tồn tại (phòng trường hợp ffmpeg lỗi nặng quá không ra file)
+          if [ ! -f "encoded/$OUT" ]; then
+            echo "Error: Output file not found. FFmpeg failed completely."
+            exit 1
+          fi
 
-          # Full debug: verbose output, show headers, show response, show HTTP code
+          echo "Uploading $OUT to server..."
+          
           curl -v \
                -T "encoded/$OUT" \
                -w "\nHTTP_STATUS=%{http_code}\n" \
-               http://uhot.ssplay.net/HY/upload.php?name=$OUT || true
+               "http://uhot.ssplay.net/HY/upload.php?name=$OUT" || true
 
           echo "--- Upload complete ---"
 
