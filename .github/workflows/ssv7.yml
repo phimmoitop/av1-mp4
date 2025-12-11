@@ -1,4 +1,4 @@
-name: Convert AV1 to H264 v5
+name: Convert AV1 to H264 v6
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ on:
         type: string
 
 permissions:
-  contents: write   # BẮT BUỘC để push vào repo
+  contents: write
 
 jobs:
   convert:
@@ -22,36 +22,43 @@ jobs:
 
     container:
       image: jrottenberg/ffmpeg:6.0-ubuntu
+      options: -v ${{ github.workspace }}:${{ github.workspace }}
 
     steps:
 
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0     # Bắt buộc để commit-push không lỗi
+          fetch-depth: 0
 
-      - name: Install curl & git inside container
+      - name: Install curl & git
         run: |
           apt-get update
           apt-get install -y curl git
 
-      - name: Fix Git safe directory (bắt buộc khi chạy trong container)
+      - name: Fix safe directory
         run: |
           git config --global --add safe.directory $GITHUB_WORKSPACE
 
+      - name: Move to workspace
+        run: cd $GITHUB_WORKSPACE
+
       - name: Prepare output folder
-        run: mkdir -p encoded
+        run: |
+          cd $GITHUB_WORKSPACE
+          mkdir -p encoded
 
       - name: Download input video
         run: |
+          cd $GITHUB_WORKSPACE
           echo "Downloading: ${{ github.event.inputs.video_url }}"
           curl -L "${{ github.event.inputs.video_url }}" -o input.mp4
           ls -lh input.mp4
 
-      - name: Convert AV1 → H264 (~200MB)
+      - name: Convert AV1 → H264
         run: |
+          cd $GITHUB_WORKSPACE
           OUT="${{ github.event.inputs.output_filename }}.mp4"
-          echo "Encoding to: $OUT"
 
           ffmpeg -y \
             -fflags +discardcorrupt \
@@ -66,23 +73,20 @@ jobs:
 
           ls -lh encoded/
 
-      - name: Commit to repo phimmoitop/av1-mp4
+      - name: Commit output to repo
         run: |
-          echo "Configuring Git"
+          cd $GITHUB_WORKSPACE
+
           git config user.name "${{ github.actor }}"
           git config user.email "actions@github.com"
 
-          echo "Adding files..."
           git add encoded/
 
-          echo "Committing..."
           git commit -m "Add encoded output: ${{ github.event.inputs.output_filename }}" || echo "No changes to commit"
 
-          echo "Pushing to main..."
           git push origin main
-        continue-on-error: false
 
-      - name: Upload video as artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: encoded_video
