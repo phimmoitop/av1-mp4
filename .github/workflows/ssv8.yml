@@ -51,9 +51,9 @@ jobs:
           ffmpeg -y \
             -err_detect ignore_err -ignore_unknown -fflags +genpts \
             -i input.mp4 \
-            -c:v libx264 -preset slow -crf 23 -maxrate 3000k -bufsize 6000k -pix_fmt yuv420p \
-            -r 25 \
-            -g 250 -keyint_min 250 -sc_threshold 0 \
+            -c:v libx264 -preset slow -crf 20 -maxrate 3500k -bufsize 6000k -pix_fmt yuv420p \
+            -r 30 \
+            -g 300 -keyint_min 300 -sc_threshold 0 \
             -c:a aac -b:a 96k \
             -max_muxing_queue_size 9999 \
             "encoded/$OUT"
