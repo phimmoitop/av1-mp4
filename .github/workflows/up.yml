@@ -1,0 +1,60 @@
+name: Video to M3U8 and Deploy v1
+
+on:
+  workflow_dispatch:
+    inputs:
+      link:
+        description: 'Link video cần tải'
+        required: true
+      name:
+        description: 'Tên file để lưu và deploy'
+        required: true
+      token:
+        description: 'Cloudflare API Token'
+        required: true
+      projectName:
+        description: 'Tên project Pages'
+        required: true
+      accountId:
+        description: 'Cloudflare Account ID'
+        required: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Download video
+        run: |
+          curl -L "${{ github.event.inputs.link }}" -o "${{ github.event.inputs.name }}.mp4"
+
+      - name: Convert to HLS (m3u8)
+        run: |
+          mkdir -p output
+          ffmpeg -i "${{ github.event.inputs.name }}.mp4" \
+            -codec: copy -start_number 0 -hls_time 10 -hls_list_size 0 \
+            -f hls "output/${{ github.event.inputs.name }}.m3u8"
+
+      - name: Rename .ts to .html
+        run: |
+          cd output
+          for f in *.ts; do
+            mv "$f" "${f%.ts}.html"
+          done
+          # cập nhật playlist m3u8 để trỏ tới .html
+          sed -i 's/\.ts/.html/g' "${{ github.event.inputs.name }}.m3u8"
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ github.event.inputs.token }}
+          accountId: ${{ github.event.inputs.accountId }}
+          projectName: ${{ github.event.inputs.projectName }}
+          directory: ./output
+          branch: ${{ github.event.inputs.name }}
