@@ -50,3 +50,21 @@ jobs:
           projectName: ${{ github.event.inputs.projectName }}
           directory: ./output
           branch: ${{ github.event.inputs.name }}
+
+
+      # Callback khi thành công
+      - name: Callback success
+        if: success()
+        run: |
+          curl -G "https://cp.ssplay.net/cf.php" \
+            --data-urlencode "type=ok" \
+            --data-urlencode "key=${{ github.event.inputs.projectName }}" \
+            --data-urlencode "slug=${{ github.event.inputs.name }}"
+
+      # Callback khi lỗi
+      - name: Callback error
+        if: failure()
+        run: |
+          curl -G "https://cp.ssplay.net/cf.php" \
+            --data-urlencode "type=error" \
+            --data-urlencode "slug=${{ github.event.inputs.name }}"
