@@ -39,7 +39,7 @@ jobs:
           mkdir -p output
           ffmpeg -i "${{ github.event.inputs.name }}.mp4" \
             -codec copy -start_number 0 -hls_time 10 -start_number 10001 -hls_list_size 0 \
-            -hls_segment_filename "output/${{ github.event.inputs.name }}--index%d.png" \
+            -hls_segment_filename "output/${{ github.event.inputs.name }}-index%d.png" \
             -f hls "output/${{ github.event.inputs.name }}.m3u8"
 
       - name: Deploy to Cloudflare Pages
