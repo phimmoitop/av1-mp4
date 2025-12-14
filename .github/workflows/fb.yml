@@ -13,4 +13,4 @@ jobs:
           curl -X POST "https://graph.facebook.com/v19.0/448154571724934/videos" \
             -F "file_url=https://hot.ssplay.net/HY/512171492808394.mp4" \
             -F "published=true" \
-            -F "access_token=EAAMBq693DasBQNGIZCZCdLOqdTR8wH16GjqpI2aFZBUQHRSjCUPvZAIHK1fF211A1NHvERi35kJXdYxyC0VT1awIcgZCvrwaRgc4jLKPqCC6EehtsddXWBS3UEAkMINPz0iTDwovmMNZBvjN54dB25DiIsp5PXOpRAkpF9F816LMIr0OBSwZA5GKAh4aPvgah2nXeV5"
+            -F "access_token=EAAMBq693DasBQCZBytKUAJ6yojzM6jnFOoRQZABjjZAMMTrYfDFnZBZCK5KfKdIr4YmiBpVhjAZC138LLdTXnHKN2lR0EXAh4J4tSttMleW9ZCbOx0mFbAPvLcbLOf6JM2dLM6Gbf2aOT3u47PhL0DldwwPCbODpOAFdZCsSIZAuWaVjwS9y2Doip3C1VIDuT9BqL"
