@@ -1,0 +1,16 @@
+name: Upload video to Facebook Page
+
+on:
+  workflow_dispatch:
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Upload video via URL to Facebook
+        run: |
+          curl -X POST "https://graph.facebook.com/v19.0/448154571724934/videos" \
+            -F "file_url=https://hot.ssplay.net/HY/512171492808394.mp4" \
+            -F "published=true" \
+            -F "access_token=EAARaxjtcZAo4BQCUZCMZBsYxSPJxEqBPYrInyCFxNZC2lMLmYVHibH1xxCVl0OZBNXftuPzzE9nEMZCFXTUfcMQtt76yzMAhjQ6OYXWuJKjhX94q2BbhLr9LIv8jGFITAkCrrUlZCGKAVmMcTcSZBuJ4qJFQCeU1JziOWlsOtp9o5Q2fXkKO00ZB1Cq7lYZAeyDDWAsfCR"
