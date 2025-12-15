@@ -1,4 +1,4 @@
-name: Video to M3U8 and Deploy
+name: GD to M3U8 and Deploy
 
 on:
   workflow_dispatch:
