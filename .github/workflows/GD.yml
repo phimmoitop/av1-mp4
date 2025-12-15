@@ -1,0 +1,112 @@
+name: Video to M3U8 and Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      link:
+        description: 'Link video cần tải (Google Drive API hoặc mp4 trực tiếp)'
+        required: true
+      name:
+        description: 'Tên file để lưu và deploy'
+        required: true
+      token:
+        description: 'Cloudflare API Token'
+        required: true
+      projectName:
+        description: 'Tên project Pages'
+        required: true
+      accountId:
+        description: 'Cloudflare Account ID'
+        required: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v2
+
+      - name: Download video (Drive API hoặc direct link)
+        run: |
+          FILE="${{ github.event.inputs.name }}.mp4"
+          LINK="${{ github.event.inputs.link }}"
+
+          echo "Download link: $LINK"
+
+          if echo "$LINK" | grep -q "www.googleapis.com"; then
+            echo "Phát hiện link Google Drive API, dùng cách tải qua API"
+            curl -L "$LINK" -o "$FILE"
+          else
+            echo "Phát hiện link trực tiếp (mp4), dùng cách tải thường"
+            curl -L "$LINK" -o "$FILE"
+          fi
+
+      - name: Verify video file (size + ffprobe)
+        run: |
+          set +e
+          FILE="${{ github.event.inputs.name }}.mp4"
+
+          # Đợi file xuất hiện
+          for i in {1..10}; do
+            if [ -f "$FILE" ]; then
+              break
+            fi
+            echo "File chưa xuất hiện, chờ 1s..."
+            sleep 1
+          done
+
+          SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+          echo "File size: $SIZE bytes"
+          if [ $SIZE -lt 1000000 ]; then
+            echo "File quá nhỏ hoặc rỗng"
+            exit 1
+          fi
+
+          # Kiểm tra bằng ffprobe
+          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$FILE")
+          echo "Video duration: $DURATION seconds"
+          if [ $? -ne 0 ]; then
+            echo "Video file invalid"
+            exit 1
+          fi
+          set -e
+
+      - name: Convert to HLS (8s segments, max 8s)
+        run: |
+          mkdir -p output
+          FILE="${{ github.event.inputs.name }}.mp4"
+          OUT="output/${{ github.event.inputs.name }}.m3u8"
+
+          ffmpeg -i "$FILE" \
+            -codec copy -start_number 0 -hls_time 8 -hls_list_size 0 \
+            -hls_flags split_by_time+independent_segments \
+            -hls_segment_filename "output/${{ github.event.inputs.name }}-%d.ts" \
+            -f hls "$OUT"
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ github.event.inputs.token }}
+          accountId: ${{ github.event.inputs.accountId }}
+          projectName: ${{ github.event.inputs.projectName }}
+          directory: ./output
+          branch: ${{ github.event.inputs.name }}
+
+      - name: Callback success
+        if: success()
+        run: |
+          curl -G "https://cp.ssplay.net/cf.php" \
+            --data-urlencode "type=ok" \
+            --data-urlencode "key=${{ github.event.inputs.projectName }}" \
+            --data-urlencode "slug=${{ github.event.inputs.name }}"
+
+      - name: Callback error
+        if: failure()
+        run: |
+          curl -G "https://cp.ssplay.net/cf.php" \
+            --data-urlencode "type=error" \
+            --data-urlencode "slug=${{ github.event.inputs.name }}"
