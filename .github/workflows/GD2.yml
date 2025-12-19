@@ -1,0 +1,122 @@
+name: Video to M3U8 and Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      link:
+        description: 'Link video cần tải'
+        required: true
+      name:
+        description: 'Tên file để lưu và deploy'
+        required: true
+      token:
+        description: 'Cloudflare API Token'
+        required: true
+      projectName:
+        description: 'Tên project Pages'
+        required: true
+      accountId:
+        description: 'Cloudflare Account ID'
+        required: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v2
+
+      - name: Download video
+        run: |
+          curl -L "${{ github.event.inputs.link }}" -o "${{ github.event.inputs.name }}.mp4"
+
+      - name: Verify video file (size + ffprobe + wait)
+        run: |
+          set +e
+          FILE="${{ github.event.inputs.name }}.mp4"
+
+          # Đợi file xuất hiện
+          for i in {1..10}; do
+            if [ -f "$FILE" ]; then
+              break
+            fi
+            echo "File chưa xuất hiện, chờ 1s..."
+            sleep 1
+          done
+
+          # Kiểm tra dung lượng >0
+          SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+          echo "File size: $SIZE bytes"
+          if [ $SIZE -eq 0 ]; then
+            echo "File chưa tải xong, retry download..."
+            curl -L "${{ github.event.inputs.link }}" -o "$FILE"
+            SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+            echo "File size after retry: $SIZE bytes"
+            if [ $SIZE -eq 0 ]; then
+              echo "File vẫn rỗng sau retry"
+              exit 1
+            fi
+          fi
+
+          # Kiểm tra dung lượng tối thiểu 1MB
+          if [ $SIZE -lt 1000000 ]; then
+            echo "File quá nhỏ (<1MB), retry download..."
+            curl -L "${{ github.event.inputs.link }}" -o "$FILE"
+            SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+            echo "File size after retry: $SIZE bytes"
+            if [ $SIZE -lt 1000000 ]; then
+              echo "File vẫn quá nhỏ sau retry"
+              exit 1
+            fi
+          fi
+
+          # Kiểm tra bằng ffprobe
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$FILE"
+          if [ $? -ne 0 ]; then
+            echo "Video file invalid, retrying download..."
+            curl -L "${{ github.event.inputs.link }}" -o "$FILE"
+            ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$FILE"
+            if [ $? -ne 0 ]; then
+              echo "Video file vẫn invalid sau retry"
+              exit 1
+            fi
+          fi
+          set -e
+
+      - name: Convert to HLS with .html segments
+        run: |
+          mkdir -p output
+          ffmpeg -i "${{ github.event.inputs.name }}.mp4" \
+            -codec copy -start_number 0 -hls_time 8 -start_number 10001 -hls_list_size 0 \
+            -hls_segment_filename "output/${{ github.event.inputs.name }}-index%d.png" \
+            -f hls "output/${{ github.event.inputs.name }}.m3u8"
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ github.event.inputs.token }}
+          accountId: ${{ github.event.inputs.accountId }}
+          projectName: ${{ github.event.inputs.projectName }}
+          directory: ./output
+          branch: ${{ github.event.inputs.name }}
+
+      # Callback khi thành công
+      - name: Callback success
+        if: success()
+        run: |
+          curl -G "https://cp.ssplay.net/cf.php" \
+            --data-urlencode "type=ok" \
+            --data-urlencode "key=${{ github.event.inputs.projectName }}" \
+            --data-urlencode "slug=${{ github.event.inputs.name }}"
+
+      # Callback khi lỗi
+      - name: Callback error
+        if: failure()
+        run: |
+          curl -G "https://cp.ssplay.net/cf.php" \
+            --data-urlencode "type=error" \
+            --data-urlencode "slug=${{ github.event.inputs.name }}"
