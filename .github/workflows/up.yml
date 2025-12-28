@@ -93,13 +93,21 @@ jobs:
           INPUT="${{ github.event.inputs.name }}.mp4"
 
           ffmpeg -i "$INPUT" \
-            -codec copy \
+            -map 0:v:0 \
+            -map 0:a:0 \
+            -c:v copy \
+            -c:a aac \
+            -profile:a aac_low \
+            -ar 48000 \
+            -ac 2 \
+            -b:a 128k \
             -start_number 10001 \
             -hls_time 4 \
             -hls_list_size 0 \
             -hls_segment_type fmp4 \
             -hls_segment_filename "output/${{ github.event.inputs.name }}-index%d.png" \
             -f hls "output/${{ github.event.inputs.name }}.m3u8"
+
 
           # Đổi tên init.mp4 thành ${{ github.event.inputs.name }}-index.png và sửa trong playlist
           if [ -f "output/init.mp4" ]; then
