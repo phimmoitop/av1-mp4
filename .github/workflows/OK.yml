@@ -1,0 +1,135 @@
+name: OKR to M3U8 and Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      link:
+        description: 'ID video OK.ru'
+        required: true
+      name:
+        description: 'Tên file để lưu và deploy'
+        required: true
+      token:
+        description: 'Cloudflare API Token'
+        required: true
+      projectName:
+        description: 'Tên project Pages'
+        required: true
+      accountId:
+        description: 'Cloudflare Account ID'
+        required: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v2
+
+      # =========================
+      # CHỈ THAY ĐỔI PHẦN NÀY
+      # =========================
+      - name: Install yt-dlp
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install yt-dlp
+
+      - name: Download OK.ru video (1080p > 720p else fail)
+        run: |
+          VIDEO_ID="${{ github.event.inputs.link }}"
+          OUTPUT="${{ github.event.inputs.name }}.mp4"
+
+          yt-dlp \
+            -f "bestvideo[height=1080]/bestvideo[height=720]" \
+            --merge-output-format mp4 \
+            -o "$OUTPUT" \
+            "https://ok.ru/video/$VIDEO_ID"
+      # =========================
+      # GIỮ NGUYÊN TỪ ĐÂY TRỞ XUỐNG
+      # =========================
+
+      - name: Verify video file (size + ffprobe + wait)
+        run: |
+          set +e
+          FILE="${{ github.event.inputs.name }}.mp4"
+
+          for i in {1..10}; do
+            if [ -f "$FILE" ]; then
+              break
+            fi
+            echo "File chưa xuất hiện, chờ 1s..."
+            sleep 1
+          done
+
+          SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+          echo "File size: $SIZE bytes"
+          if [ $SIZE -eq 0 ]; then
+            echo "File chưa tải xong, retry download..."
+            exit 1
+          fi
+
+          if [ $SIZE -lt 1000000 ]; then
+            echo "File quá nhỏ (<1MB)"
+            exit 1
+          fi
+
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$FILE"
+          if [ $? -ne 0 ]; then
+            echo "Video file invalid"
+            exit 1
+          fi
+          set -e
+
+      - name: Convert H264 to HLS (.m3u8 fMP4)
+        run: |
+          mkdir -p output
+          INPUT="${{ github.event.inputs.name }}.mp4"
+
+          ffmpeg -i "$INPUT" \
+            -map 0:v:0 \
+            -map 0:a:0 \
+            -c:v copy \
+            -c:a aac \
+            -profile:a aac_low \
+            -ar 48000 \
+            -ac 2 \
+            -b:a 128k \
+            -start_number 10001 \
+            -hls_time 4 \
+            -hls_list_size 0 \
+            -hls_segment_type fmp4 \
+            -hls_segment_filename "output/${{ github.event.inputs.name }}-index%d.png" \
+            -f hls "output/${{ github.event.inputs.name }}.m3u8"
+
+          if [ -f "output/init.mp4" ]; then
+            mv "output/init.mp4" "output/${{ github.event.inputs.name }}-index.png"
+            sed -i "s/init.mp4/${{ github.event.inputs.name }}-index.png/" "output/${{ github.event.inputs.name }}.m3u8"
+          fi
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ github.event.inputs.token }}
+          accountId: ${{ github.event.inputs.accountId }}
+          projectName: ${{ github.event.inputs.projectName }}
+          directory: ./output
+          branch: ${{ github.event.inputs.name }}
+
+      - name: Callback success
+        if: success()
+        run: |
+          curl -G "https://cp.ssplay.net/cf.php" \
+            --data-urlencode "type=ok" \
+            --data-urlencode "key=${{ github.event.inputs.projectName }}" \
+            --data-urlencode "slug=${{ github.event.inputs.name }}"
+
+      - name: Callback error
+        if: failure()
+        run: |
+          curl -G "https://cp.ssplay.net/cf.php" \
+            --data-urlencode "type=error" \
+            --data-urlencode "slug=${{ github.event.inputs.name }}"
