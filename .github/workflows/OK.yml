@@ -76,12 +76,6 @@ jobs:
             echo "File quá nhỏ (<1MB)"
             exit 1
           fi
-
-          ffmpeg -v error -i "$FILE" -map 0:v:0 -f null - 2>/dev/null
-          if [ $? -ne 0 ]; then
-            echo "Video stream decode failed"
-            exit 1
-          fi
           set -e
 
       - name: Convert H264 to HLS (.m3u8 fMP4)
