@@ -55,21 +55,26 @@ jobs:
       # GIỮ NGUYÊN TỪ ĐÂY TRỞ XUỐNG
       # =========================
 
-      - name: Remux MP4 to standard container (fix HLS AAC)
+      - name: Normalize MP4 container (fix OK.ru HLS)
         run: |
           FILE="${{ github.event.inputs.name }}.mp4"
 
           ffmpeg -y \
+            -fflags +genpts \
             -i "$FILE" \
             -map 0:v:0 \
             -map 0:a:0? \
             -c:v copy \
-            -c:a copy \
-            -bsf:a aac_adtstoasc \
+            -c:a aac \
+            -profile:a aac_low \
+            -ar 48000 \
+            -ac 2 \
+            -b:a 128k \
             -movflags +faststart \
             "${FILE}.fixed.mp4"
 
           mv "${FILE}.fixed.mp4" "$FILE"
+
 
 
       - name: Verify video file (size + ffprobe + wait)
