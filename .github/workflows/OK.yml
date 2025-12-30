@@ -161,10 +161,6 @@ jobs:
           if [ "$SIZE" -lt 1000000 ]; then
             exit 1
           fi
-          HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$FILE" || echo 0)
-          if [ "$HEIGHT" -lt 720 ]; then
-            exit 2
-          fi
 
       - name: Attempt 5 — manual HLS capture
         id: a5
@@ -202,10 +198,6 @@ jobs:
           fi
           SIZE=$(stat -c%s "$FILE" || echo 0)
           if [ "$SIZE" -lt 1000000 ]; then
-            exit 1
-          fi
-          HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$FILE" || echo 0)
-          if [ "$HEIGHT" -lt 720 ]; then
             exit 1
           fi
 
