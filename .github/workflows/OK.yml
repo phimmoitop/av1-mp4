@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       link:
-        description: 'ID video OK.ru'
+        description: 'ID video OK.ru hoặc URL'
         required: true
       name:
         description: 'Tên file để lưu và deploy'
@@ -33,22 +33,182 @@ jobs:
       # =========================
       # CHỈ THAY ĐỔI PHẦN NÀY
       # =========================
-      - name: Install yt-dlp
+      - name: Prepare environment (Python + extra tools)
         run: |
+          set -eux
           python3 -m pip install --upgrade pip
-          pip install yt-dlp
+          pip install --upgrade yt-dlp
+          sudo apt-get update
+          sudo apt-get install -y aria2 jq curl
+          python3 -m pip install --upgrade youtube_dl || true
 
-      - name: Download OK.ru video (1080p > 720p else fail)
+      - name: Normalize OK.ru URL and set variables
+        id: vars
         run: |
-          VIDEO_ID="${{ github.event.inputs.link }}"
-          OUTPUT="${{ github.event.inputs.name }}.mp4"
+          set -eux
+          RAW="${{ github.event.inputs.link }}"
+          NAME="${{ github.event.inputs.name }}"
+          if echo "$RAW" | grep -Eq '^[0-9]+$'; then
+            URL="https://ok.ru/video/$RAW"
+          else
+            URL="$RAW"
+          fi
+          echo "URL=$URL" >> $GITHUB_OUTPUT
+          echo "OUT_MP4=${NAME}.mp4" >> $GITHUB_OUTPUT
+          echo 'UA=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36' >> $GITHUB_OUTPUT
+          echo 'REF=https://ok.ru/' >> $GITHUB_OUTPUT
+
+      - name: Attempt 1 — yt-dlp strict (prefer 1080p > 720p)
+        id: a1
+        continue-on-error: true
+        run: |
+          URL="${{ steps.vars.outputs.URL }}"
+          OUT="${{ steps.vars.outputs.OUT_MP4 }}"
+          UA="${{ steps.vars.outputs.UA }}"
+          REF="${{ steps.vars.outputs.REF }}"
 
           yt-dlp \
-          -f "bv*+ba/best" \
-          --merge-output-format mp4 \
-          --hls-prefer-native \
-          -o "$OUTPUT" \
-          "https://ok.ru/video/$VIDEO_ID" || true
+            -f "bv*[height>=1080]+ba/bv*[height>=720]+ba" \
+            --merge-output-format mp4 \
+            --hls-prefer-native \
+            --downloader aria2c \
+            --downloader-args "aria2c:--max-connection-per-server=8 --split=8 --min-split-size=1M" \
+            --add-header "User-Agent: ${UA}" \
+            --add-header "Referer: ${REF}" \
+            --retries 10 \
+            --fragment-retries 10 \
+            --buffer-size 32M \
+            --no-check-certificate \
+            -o "$OUT" \
+            "$URL"
+
+      - name: Attempt 2 — yt-dlp relaxed format
+        id: a2
+        if: steps.a1.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          URL="${{ steps.vars.outputs.URL }}"
+          OUT="${{ steps.vars.outputs.OUT_MP4 }}"
+          UA="${{ steps.vars.outputs.UA }}"
+          REF="${{ steps.vars.outputs.REF }}"
+
+          yt-dlp \
+            -f "bv*+ba/best" \
+            --merge-output-format mp4 \
+            --hls-prefer-native \
+            --add-header "User-Agent: ${UA}" \
+            --add-header "Referer: ${REF}" \
+            --retries 10 \
+            --fragment-retries 10 \
+            --buffer-size 32M \
+            --no-check-certificate \
+            -o "$OUT" \
+            "$URL"
+
+      - name: Attempt 3 — yt-dlp extractor tuning
+        id: a3
+        if: steps.a1.outcome == 'failure' && steps.a2.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          URL="${{ steps.vars.outputs.URL }}"
+          OUT="${{ steps.vars.outputs.OUT_MP4 }}"
+          UA="${{ steps.vars.outputs.UA }}"
+          REF="${{ steps.vars.outputs.REF }}"
+
+          yt-dlp \
+            --extractor-args "okru:hd=1" \
+            --geo-bypass \
+            --hls-prefer-native \
+            --add-header "User-Agent: ${UA}" \
+            --add-header "Referer: ${REF}" \
+            -f "bv*+ba/best" \
+            --merge-output-format mp4 \
+            --retries 10 \
+            --fragment-retries 10 \
+            -o "$OUT" \
+            "$URL"
+
+      - name: Attempt 4 — youtube-dl fallback
+        id: a4
+        if: steps.a1.outcome == 'failure' && steps.a2.outcome == 'failure' && steps.a3.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          URL="${{ steps.vars.outputs.URL }}"
+          OUT="${{ steps.vars.outputs.OUT_MP4 }}"
+          UA="${{ steps.vars.outputs.UA }}"
+          REF="${{ steps.vars.outputs.REF }}"
+
+          youtube-dl \
+            -f "bestvideo+bestaudio/best" \
+            --user-agent "$UA" \
+            --add-header "Referer: ${REF}" \
+            --retries 10 \
+            -o "$OUT" \
+            "$URL"
+
+      - name: Probe resolution and validate size
+        id: validate1
+        run: |
+          FILE="${{ steps.vars.outputs.OUT_MP4 }}"
+          for i in $(seq 1 15); do
+            [ -f "$FILE" ] && break
+            sleep 1
+          done
+          if [ ! -f "$FILE" ]; then
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$FILE" || echo 0)
+          if [ "$SIZE" -lt 1000000 ]; then
+            exit 1
+          fi
+          HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$FILE" || echo 0)
+          if [ "$HEIGHT" -lt 720 ]; then
+            exit 2
+          fi
+
+      - name: Attempt 5 — manual HLS capture
+        id: a5
+        if: steps.validate1.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          URL="${{ steps.vars.outputs.URL }}"
+          OUT="${{ steps.vars.outputs.OUT_MP4 }}"
+          UA="${{ steps.vars.outputs.UA }}"
+          REF="${{ steps.vars.outputs.REF }}"
+
+          PAGE=$(mktemp)
+          curl -sSL -A "$UA" -H "Referer: ${REF}" "$URL" > "$PAGE" || true
+          M3U8_URL=$(grep -Eo 'https?://[^"]+\.m3u8[^"]*' "$PAGE" | head -n1 || true)
+          if [ -z "$M3U8_URL" ]; then
+            MANIFEST=$(yt-dlp --dump-json --no-warnings "$URL" 2>/dev/null | jq -r '.. | .url? // empty | select(contains(".m3u8"))' | head -n1 || true)
+            [ -n "$MANIFEST" ] && M3U8_URL="$MANIFEST"
+          fi
+          if [ -z "$M3U8_URL" ]; then
+            exit 1
+          fi
+          ffmpeg \
+            -user_agent "$UA" \
+            -headers "Referer: ${REF}\r\n" \
+            -i "$M3U8_URL" \
+            -c copy \
+            -bsf:a aac_adtstoasc \
+            "$OUT"
+
+      - name: Final validation
+        run: |
+          FILE="${{ steps.vars.outputs.OUT_MP4 }}"
+          if [ ! -f "$FILE" ]; then
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$FILE" || echo 0)
+          if [ "$SIZE" -lt 1000000 ]; then
+            exit 1
+          fi
+          HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$FILE" || echo 0)
+          if [ "$HEIGHT" -lt 720 ]; then
+            exit 1
+          fi
+
       # =========================
       # GIỮ NGUYÊN TỪ ĐÂY TRỞ XUỐNG
       # =========================
