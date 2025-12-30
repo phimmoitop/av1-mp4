@@ -1,4 +1,4 @@
-name: OKR to M3U8 and Deploy
+name: OKR to M3U8 and Deploy Optimized
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
         description: 'ID video OK.ru hoặc URL'
         required: true
       name:
-        description: 'Tên file để lưu và deploy'
+        description: 'Tên file (slug) để deploy'
         required: true
       token:
         description: 'Cloudflare API Token'
@@ -22,239 +22,74 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Setup FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v2
-
-      # =========================
-      # CHỈ THAY ĐỔI PHẦN NÀY
-      # =========================
-      - name: Prepare environment (Python + extra tools)
+      - name: Install dependencies
         run: |
-          set -eux
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg aria2 jq
           python3 -m pip install --upgrade pip
           pip install --upgrade yt-dlp
-          sudo apt-get update
-          sudo apt-get install -y aria2 jq curl
-          python3 -m pip install --upgrade youtube_dl || true
 
-      - name: Normalize OK.ru URL and set variables
-        id: vars
+      - name: Download Video from OK.ru
+        id: download
         run: |
-          set -eux
-          RAW="${{ github.event.inputs.link }}"
-          NAME="${{ github.event.inputs.name }}"
-          if echo "$RAW" | grep -Eq '^[0-9]+$'; then
-            URL="https://ok.ru/video/$RAW"
+          RAW_URL="${{ github.event.inputs.link }}"
+          # Chuyển ID số thành URL nếu cần
+          if [[ "$RAW_URL" =~ ^[0-9]+$ ]]; then
+            URL="https://ok.ru/video/$RAW_URL"
           else
-            URL="$RAW"
+            URL="$RAW_URL"
           fi
-          echo "URL=$URL" >> $GITHUB_OUTPUT
-          echo "OUT_MP4=${NAME}.mp4" >> $GITHUB_OUTPUT
-          echo 'UA=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36' >> $GITHUB_OUTPUT
-          echo 'REF=https://ok.ru/' >> $GITHUB_OUTPUT
-
-      - name: Attempt 1 — yt-dlp strict (prefer 1080p > 720p)
-        id: a1
-        continue-on-error: true
-        run: |
-          URL="${{ steps.vars.outputs.URL }}"
-          OUT="${{ steps.vars.outputs.OUT_MP4 }}"
-          UA="${{ steps.vars.outputs.UA }}"
-          REF="${{ steps.vars.outputs.REF }}"
-
+          
+          echo "Downloading from: $URL"
+          
+          # Tải video chất lượng tốt nhất (ưu tiên 1080p/720p)
+          # Sử dụng aria2 để tăng tốc tải
           yt-dlp \
-            -f "bv*[height>=1080]+ba/bv*[height>=720]+ba" \
+            -f "bv*[height<=1080]+ba/b[height<=1080] / best" \
             --merge-output-format mp4 \
-            --hls-prefer-native \
             --downloader aria2c \
-            --downloader-args "aria2c:--max-connection-per-server=8 --split=8 --min-split-size=1M" \
-            --add-header "User-Agent: ${UA}" \
-            --add-header "Referer: ${REF}" \
-            --retries 10 \
-            --fragment-retries 10 \
-            --buffer-size 32M \
+            --downloader-args "aria2c:--max-connection-per-server=16 --split=16" \
             --no-check-certificate \
-            -o "$OUT" \
+            -o "input_video.mp4" \
             "$URL"
-
-      - name: Attempt 2 — yt-dlp relaxed format
-        id: a2
-        if: steps.a1.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          URL="${{ steps.vars.outputs.URL }}"
-          OUT="${{ steps.vars.outputs.OUT_MP4 }}"
-          UA="${{ steps.vars.outputs.UA }}"
-          REF="${{ steps.vars.outputs.REF }}"
-
-          yt-dlp \
-            -f "bv*+ba/best" \
-            --merge-output-format mp4 \
-            --hls-prefer-native \
-            --add-header "User-Agent: ${UA}" \
-            --add-header "Referer: ${REF}" \
-            --retries 10 \
-            --fragment-retries 10 \
-            --buffer-size 32M \
-            --no-check-certificate \
-            -o "$OUT" \
-            "$URL"
-
-      - name: Attempt 3 — yt-dlp extractor tuning
-        id: a3
-        if: steps.a1.outcome == 'failure' && steps.a2.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          URL="${{ steps.vars.outputs.URL }}"
-          OUT="${{ steps.vars.outputs.OUT_MP4 }}"
-          UA="${{ steps.vars.outputs.UA }}"
-          REF="${{ steps.vars.outputs.REF }}"
-
-          yt-dlp \
-            --extractor-args "okru:hd=1" \
-            --geo-bypass \
-            --hls-prefer-native \
-            --add-header "User-Agent: ${UA}" \
-            --add-header "Referer: ${REF}" \
-            -f "bv*+ba/best" \
-            --merge-output-format mp4 \
-            --retries 10 \
-            --fragment-retries 10 \
-            -o "$OUT" \
-            "$URL"
-
-      - name: Attempt 4 — youtube-dl fallback
-        id: a4
-        if: steps.a1.outcome == 'failure' && steps.a2.outcome == 'failure' && steps.a3.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          URL="${{ steps.vars.outputs.URL }}"
-          OUT="${{ steps.vars.outputs.OUT_MP4 }}"
-          UA="${{ steps.vars.outputs.UA }}"
-          REF="${{ steps.vars.outputs.REF }}"
-
-          youtube-dl \
-            -f "bestvideo+bestaudio/best" \
-            --user-agent "$UA" \
-            --add-header "Referer: ${REF}" \
-            --retries 10 \
-            -o "$OUT" \
-            "$URL"
-
-      - name: Probe resolution and validate size
-        id: validate1
-        run: |
-          FILE="${{ steps.vars.outputs.OUT_MP4 }}"
-          for i in $(seq 1 15); do
-            [ -f "$FILE" ] && break
-            sleep 1
-          done
-          if [ ! -f "$FILE" ]; then
-            exit 1
-          fi
-          SIZE=$(stat -c%s "$FILE" || echo 0)
-          if [ "$SIZE" -lt 1000000 ]; then
+          
+          # Kiểm tra file tồn tại và size > 0
+          if [ ! -s input_video.mp4 ]; then
+            echo "Download failed or file empty"
             exit 1
           fi
 
-      - name: Attempt 5 — manual HLS capture
-        id: a5
-        if: steps.validate1.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          URL="${{ steps.vars.outputs.URL }}"
-          OUT="${{ steps.vars.outputs.OUT_MP4 }}"
-          UA="${{ steps.vars.outputs.UA }}"
-          REF="${{ steps.vars.outputs.REF }}"
-
-          PAGE=$(mktemp)
-          curl -sSL -A "$UA" -H "Referer: ${REF}" "$URL" > "$PAGE" || true
-          M3U8_URL=$(grep -Eo 'https?://[^"]+\.m3u8[^"]*' "$PAGE" | head -n1 || true)
-          if [ -z "$M3U8_URL" ]; then
-            MANIFEST=$(yt-dlp --dump-json --no-warnings "$URL" 2>/dev/null | jq -r '.. | .url? // empty | select(contains(".m3u8"))' | head -n1 || true)
-            [ -n "$MANIFEST" ] && M3U8_URL="$MANIFEST"
-          fi
-          if [ -z "$M3U8_URL" ]; then
-            exit 1
-          fi
-          ffmpeg \
-            -user_agent "$UA" \
-            -headers "Referer: ${REF}\r\n" \
-            -i "$M3U8_URL" \
-            -c copy \
-            -bsf:a aac_adtstoasc \
-            "$OUT"
-
-      - name: Final validation
-        run: |
-          FILE="${{ steps.vars.outputs.OUT_MP4 }}"
-          if [ ! -f "$FILE" ]; then
-            exit 1
-          fi
-          SIZE=$(stat -c%s "$FILE" || echo 0)
-          if [ "$SIZE" -lt 1000000 ]; then
-            exit 1
-          fi
-
-      # =========================
-      # GIỮ NGUYÊN TỪ ĐÂY TRỞ XUỐNG
-      # =========================
-
-      - name: Verify video file (size + ffprobe + wait)
-        run: |
-          set +e
-          FILE="${{ github.event.inputs.name }}.mp4"
-
-          for i in {1..10}; do
-            if [ -f "$FILE" ]; then
-              break
-            fi
-            echo "File chưa xuất hiện, chờ 1s..."
-            sleep 1
-          done
-
-          SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
-          echo "File size: $SIZE bytes"
-          if [ $SIZE -eq 0 ]; then
-            echo "File chưa tải xong, retry download..."
-            exit 1
-          fi
-
-          if [ $SIZE -lt 1000000 ]; then
-            echo "File quá nhỏ (<1MB)"
-            exit 1
-          fi
-          set -e
-
-      - name: Convert H264 to HLS (.m3u8 fMP4)
+      - name: Convert to HLS fMP4 (Segments as PNG)
         run: |
           mkdir -p output
-          INPUT="${{ github.event.inputs.name }}.mp4"
-
-          ffmpeg -i "$INPUT" \
-            -map 0:v:0 \
-            -map 0:a:0 \
+          NAME="${{ github.event.inputs.name }}"
+          
+          # Giải thích các tham số FFmpeg:
+          # -map 0:v:0 -map 0:a? : Lấy video đầu tiên, lấy audio nếu có (không lỗi nếu ko có audio)
+          # -c:v copy : Giữ nguyên bitrate/chất lượng video (không encode lại - cực nhanh)
+          # -hls_fmp4_init_filename : Đặt tên file init (quan trọng nhất của fMP4) thành .png
+          # -hls_segment_filename : Đặt tên các mảnh segment thành .png
+          
+          ffmpeg -i input_video.mp4 \
+            -map 0:v:0 -map 0:a? \
             -c:v copy \
-            -c:a aac \
-            -profile:a aac_low \
-            -ar 48000 \
-            -ac 2 \
-            -b:a 128k \
-            -start_number 10001 \
-            -hls_time 4 \
+            -c:a aac -b:a 128k \
+            -f hls \
+            -hls_time 6 \
             -hls_list_size 0 \
             -hls_segment_type fmp4 \
-            -hls_segment_filename "output/${{ github.event.inputs.name }}-index%d.png" \
-            -f hls "output/${{ github.event.inputs.name }}.m3u8"
-
-          if [ -f "output/init.mp4" ]; then
-            mv "output/init.mp4" "output/${{ github.event.inputs.name }}-index.png"
-            sed -i "s/init.mp4/${{ github.event.inputs.name }}-index.png/" "output/${{ github.event.inputs.name }}.m3u8"
+            -hls_fmp4_init_filename "${NAME}-init.png" \
+            -hls_segment_filename "output/${NAME}-segment%d.png" \
+            "output/${NAME}.m3u8"
+          
+          # Kiểm tra xem file m3u8 có được tạo không
+          if [ ! -f "output/${NAME}.m3u8" ]; then
+            echo "FFmpeg failed to create m3u8"
+            exit 1
           fi
 
       - name: Deploy to Cloudflare Pages
@@ -264,19 +99,18 @@ jobs:
           accountId: ${{ github.event.inputs.accountId }}
           projectName: ${{ github.event.inputs.projectName }}
           directory: ./output
-          branch: ${{ github.event.inputs.name }}
+          branch: "main" # Hoặc dùng ${{ github.event.inputs.name }} nếu bạn muốn mỗi phim 1 branch
 
-      - name: Callback success
-        if: success()
+      - name: Callback status
+        if: always()
         run: |
+          STATUS="${{ job.status }}"
+          if [ "$STATUS" == "success" ]; then
+            TYPE="ok"
+          else
+            TYPE="error"
+          fi
           curl -G "https://cp.ssplay.net/cf.php" \
-            --data-urlencode "type=ok" \
+            --data-urlencode "type=$TYPE" \
             --data-urlencode "key=${{ github.event.inputs.projectName }}" \
-            --data-urlencode "slug=${{ github.event.inputs.name }}"
-
-      - name: Callback error
-        if: failure()
-        run: |
-          curl -G "https://cp.ssplay.net/cf.php" \
-            --data-urlencode "type=error" \
             --data-urlencode "slug=${{ github.event.inputs.name }}"
