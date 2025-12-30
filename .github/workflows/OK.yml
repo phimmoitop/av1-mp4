@@ -77,9 +77,9 @@ jobs:
             exit 1
           fi
 
-          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$FILE"
+          ffmpeg -v error -i "$FILE" -map 0:v:0 -f null - 2>/dev/null
           if [ $? -ne 0 ]; then
-            echo "Video file invalid"
+            echo "Video stream decode failed"
             exit 1
           fi
           set -e
