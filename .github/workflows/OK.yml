@@ -44,16 +44,11 @@ jobs:
           OUTPUT="${{ github.event.inputs.name }}.mp4"
 
           yt-dlp \
-            --no-playlist \
-            --no-progress \
-            --no-warnings \
-            --ignore-errors \
-            --no-call-home \
-            --no-check-certificates \
+            --downloader ffmpeg \
             -f "(bestvideo[height=1080]/bestvideo[height=720])+bestaudio/best" \
             --merge-output-format mp4 \
             -o "$OUTPUT" \
-            "https://ok.ru/video/$VIDEO_ID"
+            "https://ok.ru/video/$VIDEO_ID" || true
       # =========================
       # GIỮ NGUYÊN TỪ ĐÂY TRỞ XUỐNG
       # =========================
