@@ -45,10 +45,12 @@ jobs:
 
           yt-dlp \
             --hls-use-mpegts \
+            --referer "https://ok.ru/" \
+            --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36" \
             -f "(bestvideo[height=1080]/bestvideo[height=720])+bestaudio/best" \
             --merge-output-format mp4 \
             -o "$OUTPUT" \
-            "https://ok.ru/video/$VIDEO_ID"
+            "https://ok.ru/videoembed/$VIDEO_ID"
       # =========================
       # GIỮ NGUYÊN TỪ ĐÂY TRỞ XUỐNG
       # =========================
