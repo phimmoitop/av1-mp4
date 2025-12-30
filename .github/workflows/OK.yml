@@ -44,8 +44,8 @@ jobs:
           OUTPUT="${{ github.event.inputs.name }}.mp4"
 
           yt-dlp \
-            --downloader ffmpeg \
-            -f "(bestvideo[ext=mp4][vcodec^=avc][height<=1080]/bestvideo[ext=mp4][vcodec^=avc][height<=720]/best[ext=mp4])" \
+            -f "bestvideo[height=1080]+bestaudio/bestvideo[height=720]+bestaudio" \
+            --merge-output-format mp4 \
             -o "$OUTPUT" \
             "https://ok.ru/video/$VIDEO_ID" || true
       # =========================
