@@ -100,7 +100,7 @@ jobs:
           accountId: ${{ github.event.inputs.accountId }}
           projectName: ${{ github.event.inputs.projectName }}
           directory: ./output
-          branch: "main" # Hoặc dùng ${{ github.event.inputs.name }} nếu bạn muốn mỗi phim 1 branch
+          branch: ${{ github.event.inputs.name }}
 
       - name: Callback status
         if: always()
