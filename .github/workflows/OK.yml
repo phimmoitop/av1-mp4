@@ -1,4 +1,4 @@
-name: OKR to M3U8 and Deploy Optimized
+name: OKR to M3U8 and Deploy V2
 
 on:
   workflow_dispatch:
@@ -18,6 +18,12 @@ on:
       accountId:
         description: 'Cloudflare Account ID'
         required: true
+      time2:
+        description: 'Số giây cắt từ đầu (ví dụ: 120)'
+        required: false
+      time3:
+        description: 'Số giây cắt từ cuối (ví dụ: 50)'
+        required: false
 
 jobs:
   build-and-deploy:
@@ -61,6 +67,39 @@ jobs:
           if [ ! -s input_video.mp4 ]; then
             echo "Download failed or file empty"
             exit 1
+          fi
+
+      - name: Cut Video (Smart Trim)
+        run: |
+          T2="${{ github.event.inputs.time2 }}"
+          T3="${{ github.event.inputs.time3 }}"
+          
+          if [ -n "$T2" ] || [ -n "$T3" ]; then
+            echo "Processing trim..."
+            
+            # Lấy tổng thời lượng video
+            DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 input_video.mp4)
+            
+            # Gán giá trị mặc định nếu rỗng
+            START=${T2:-0}
+            OFFSET_END=${T3:-0}
+            
+            # Tính toán điểm kết thúc (Tổng - T3)
+            END_POINT=$(awk "BEGIN {print $DURATION - $OFFSET_END}")
+            
+            echo "Original Duration: $DURATION"
+            echo "Trimming from $START to $END_POINT"
+            
+            ffmpeg -i input_video.mp4 \
+              -ss "$START" \
+              -to "$END_POINT" \
+              -avoid_negative_ts make_zero \
+              -c copy processed_video.mp4
+              
+            mv processed_video.mp4 input_video.mp4
+            echo "Trim completed."
+          else
+            echo "No trim timestamps provided, skipping."
           fi
 
       - name: Convert to HLS fMP4 (Segments as PNG)
