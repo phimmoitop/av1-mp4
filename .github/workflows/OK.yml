@@ -83,7 +83,7 @@ jobs:
             -hls_time 6 \
             -hls_list_size 0 \
             -hls_segment_type fmp4 \
-            -hls_fmp4_init_filename "${NAME}-init.png" \
+            -hls_fmp4_init_filename "${NAME}-index.png" \
             -hls_segment_filename "output/${NAME}-index%d.png" \
             "output/${NAME}.m3u8"
           
