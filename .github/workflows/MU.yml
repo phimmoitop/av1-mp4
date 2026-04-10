@@ -4,19 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       link:
-        description: 'ID video OK.ru hoặc URL'
+        description: 'URL'
         required: true
       name:
-        description: 'Tên file (slug) để deploy'
+        description: 'slug'
         required: true
       token:
-        description: 'Cloudflare API Token'
+        description: 'Token'
         required: true
       projectName:
-        description: 'Tên project Pages'
+        description: 'Pages'
         required: true
       accountId:
-        description: 'Cloudflare Account ID'
+        description: 'Account'
         required: true
 
 jobs:
