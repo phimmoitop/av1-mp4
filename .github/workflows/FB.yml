@@ -36,7 +36,7 @@ jobs:
       - name: Get Video Link From Page
         id: getlink
         run: |
-          PAGE_URL="https://ssplay.net/yan.php?link=https://yanhh3d.cx/play-fb-v8/play/${{ github.event.inputs.link }}"
+          PAGE_URL="https://ssplay.net/yan.php?link=https://yanhh3d.app/play-fb-v8/play/${{ github.event.inputs.link }}"
           echo "[PAGE] $PAGE_URL"
 
           curl -L "$PAGE_URL" -o page.html
