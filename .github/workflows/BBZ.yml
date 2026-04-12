@@ -34,7 +34,23 @@ jobs:
 
       - name: Download video
         run: |
-          ffmpeg -allowed_extensions ALL -f hls -i "${{ github.event.inputs.link }}" -c copy -bsf:a aac_adtstoasc "${{ github.event.inputs.slug }}.mp4"
+          # 1. Tải file m3u8 về máy local
+          curl -L "${{ github.event.inputs.link }}" -o playlist.m3u8
+          
+          # 2. Trích xuất lấy phần Authorization từ link gốc
+          # Cách này lấy toàn bộ phần sau dấu ?
+          AUTH_TOKEN=$(echo "${{ github.event.inputs.link }}" | cut -d'?' -f2)
+          
+          # 3. Chèn token vào cuối mỗi dòng .html trong file m3u8
+          # Dùng sed để tìm dòng có .html và thêm ?${AUTH_TOKEN} vào cuối
+          sed -i "s/\.html/\.html?${AUTH_TOKEN}/g" playlist.m3u8
+          
+          # 4. Chạy FFmpeg với file m3u8 đã sửa
+          # Cần thêm -protocol_whitelist để cho phép đọc file local rồi truy cập link https
+          ffmpeg -protocol_whitelist file,http,https,tcp,tls,crypto \
+                 -allowed_extensions ALL \
+                 -i playlist.m3u8 \
+                 -c copy -bsf:a aac_adtstoasc "${{ github.event.inputs.slug }}.mp4"
       
       - name: Convert to HLS (.m3u8 fMP4)
         run: |
