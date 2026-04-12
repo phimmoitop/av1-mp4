@@ -32,7 +32,7 @@ jobs:
 
       - name: Download video
         run: |
-          curl -L "${{ github.event.inputs.link }}" -o "${{ github.event.inputs.slug }}.mp4"
+          curl -L "${{ github.event.inputs.link }}" -c copy -bsf:a aac_adtstoasc -o "${{ github.event.inputs.slug }}.mp4"
 
       - name: Verify video file (size + ffprobe + wait)
         run: |
@@ -73,32 +73,24 @@ jobs:
               exit 1
             fi
           fi
-      - name: Convert H264 to HLS (.m3u8 fMP4)
+          
+      - name: Convert to HLS (.m3u8 fMP4)
         run: |
           mkdir -p output
           INPUT="${{ github.event.inputs.slug }}.mp4"
 
           ffmpeg -i "$INPUT" \
             -map 0:v:0 \
-            -map 0:a:0 \
+            -map 0:a? \
             -c:v copy \
-            -c:a aac \
-            -profile:a aac_low \
-            -ar 48000 \
-            -ac 2 \
-            -b:a 128k \
+            -c:a copy \
             -start_number 10001 \
             -hls_time 4 \
             -hls_list_size 0 \
             -hls_segment_type fmp4 \
+            -hls_fmp4_init_filename "${{ github.event.inputs.slug }}-index.png" \
             -hls_segment_filename "output/${{ github.event.inputs.slug }}-index%d.png" \
             -f hls "output/${{ github.event.inputs.slug }}.m3u8"
-
-          # Đổi tên init.mp4 thành ${{ github.event.inputs.slug }}-index.png và sửa trong playlist
-          if [ -f "output/init.mp4" ]; then
-            mv "output/init.mp4" "output/${{ github.event.inputs.slug }}-index.png"
-            sed -i "s/init.mp4/${{ github.event.inputs.slug }}-index.png/" "output/${{ github.event.inputs.slug }}.m3u8"
-          fi
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/pages-action@v1
