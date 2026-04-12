@@ -34,22 +34,28 @@ jobs:
 
       - name: Download video
         run: |
-          # 1. Tải file m3u8 về máy local
-          curl -L "${{ github.event.inputs.link }}" -o playlist.m3u8
+          # 1. Lấy Base URL (cắt bỏ phần tên file m3u8 và query đằng sau)
+          # Kết quả sẽ có dạng: https://bbz.hh3dtv.cc/file/012478b95a18/
+          BASE_URL=$(echo "${{ github.event.inputs.link }}" | sed 's/\/[^\/]*\.m3u8.*$/\//')
           
-          # 2. Trích xuất lấy phần Authorization từ link gốc
-          # Cách này lấy toàn bộ phần sau dấu ?
+          # 2. Lấy Authorization token (phần sau dấu ?)
           AUTH_TOKEN=$(echo "${{ github.event.inputs.link }}" | cut -d'?' -f2)
           
-          # 3. Chèn token vào cuối mỗi dòng .html trong file m3u8
-          # Dùng sed để tìm dòng có .html và thêm ?${AUTH_TOKEN} vào cuối
-          sed -i "s/\.html/\.html?${AUTH_TOKEN}/g" playlist.m3u8
+          # 3. Tải m3u8 về
+          curl -L "${{ github.event.inputs.link }}" -o playlist_original.m3u8
           
-          # 4. Chạy FFmpeg với file m3u8 đã sửa
-          # Cần thêm -protocol_whitelist để cho phép đọc file local rồi truy cập link https
+          # 4. Sửa file m3u8: 
+          # Thay thế "tên_file.html" thành "https://domain.com/.../tên_file.html?Authorization=..."
+          # Dùng dấu | làm phân cách cho sed để tránh xung đột với dấu / trong URL
+          sed "s|LKT-VS-[0-9]*.html|${BASE_URL}&?${AUTH_TOKEN}|g" playlist_original.m3u8 > playlist_fixed.m3u8
+          
+          # Kiểm tra nội dung file đã sửa (optional - để debug nếu cần)
+          head -n 20 playlist_fixed.m3u8
+          
+          # 5. Chạy FFmpeg
           ffmpeg -protocol_whitelist file,http,https,tcp,tls,crypto \
                  -allowed_extensions ALL \
-                 -i playlist.m3u8 \
+                 -i playlist_fixed.m3u8 \
                  -c copy -bsf:a aac_adtstoasc "${{ github.event.inputs.slug }}.mp4"
       
       - name: Convert to HLS (.m3u8 fMP4)
