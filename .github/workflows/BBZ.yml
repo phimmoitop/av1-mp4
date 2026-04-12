@@ -1,0 +1,165 @@
+name: Video to M3U8 and Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      link:
+        description: 'Link video cần tải'
+        required: true
+      slug:
+        description: 'Slug'
+        required: true
+      token:
+        description: 'Token'
+        required: true
+      page:
+        description: 'Pages'
+        required: true
+      account:
+        description: 'Account'
+        required: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v2
+
+      - name: Download video
+        run: |
+          curl -L "${{ github.event.inputs.link }}" -o "${{ github.event.inputs.slug }}.mp4"
+
+      - name: Verify video file (size + ffprobe + wait)
+        run: |
+          set +e
+          FILE="${{ github.event.inputs.slug }}.mp4"
+
+          # Đợi file xuất hiện
+          for i in {1..10}; do
+            if [ -f "$FILE" ]; then
+              break
+            fi
+            echo "File chưa xuất hiện, chờ 1s..."
+            sleep 1
+          done
+
+          # Kiểm tra dung lượng >0
+          SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+          echo "File size: $SIZE bytes"
+          if [ $SIZE -eq 0 ]; then
+            echo "File chưa tải xong, retry download..."
+            curl -L "${{ github.event.inputs.link }}" -o "$FILE"
+            SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+            echo "File size after retry: $SIZE bytes"
+            if [ $SIZE -eq 0 ]; then
+              echo "File vẫn rỗng sau retry"
+              exit 1
+            fi
+          fi
+
+          # Kiểm tra dung lượng tối thiểu 1MB
+          if [ $SIZE -lt 1000000 ]; then
+            echo "File quá nhỏ (<1MB), retry download..."
+            curl -L "${{ github.event.inputs.link }}" -o "$FILE"
+            SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+            echo "File size after retry: $SIZE bytes"
+            if [ $SIZE -lt 1000000 ]; then
+              echo "File vẫn quá nhỏ sau retry"
+              exit 1
+            fi
+          fi
+      - name: Convert H264 to HLS (.m3u8 fMP4)
+        run: |
+          mkdir -p output
+          INPUT="${{ github.event.inputs.slug }}.mp4"
+
+          ffmpeg -i "$INPUT" \
+            -map 0:v:0 \
+            -map 0:a:0 \
+            -c:v copy \
+            -c:a aac \
+            -profile:a aac_low \
+            -ar 48000 \
+            -ac 2 \
+            -b:a 128k \
+            -start_number 10001 \
+            -hls_time 4 \
+            -hls_list_size 0 \
+            -hls_segment_type fmp4 \
+            -hls_segment_filename "output/${{ github.event.inputs.slug }}-index%d.png" \
+            -f hls "output/${{ github.event.inputs.slug }}.m3u8"
+
+          # Đổi tên init.mp4 thành ${{ github.event.inputs.slug }}-index.png và sửa trong playlist
+          if [ -f "output/init.mp4" ]; then
+            mv "output/init.mp4" "output/${{ github.event.inputs.slug }}-index.png"
+            sed -i "s/init.mp4/${{ github.event.inputs.slug }}-index.png/" "output/${{ github.event.inputs.slug }}.m3u8"
+          fi
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ github.event.inputs.token }}
+          accountId: ${{ github.event.inputs.account }}
+          projectName: ${{ github.event.inputs.page }}
+          directory: ./output
+          branch: ${{ github.event.inputs.slug }}
+
+            
+      - name: Verify Cloudflare deployment (branch domain check)
+        id: verify
+        continue-on-error: true
+        env:
+          PROJECT: ${{ github.event.inputs.page }}
+          BRANCH: ${{ github.event.inputs.slug }}
+        run: |
+          set -e
+          FILE_URL="https://${{ github.event.inputs.slug }}.${{ github.event.inputs.page }}.pages.dev/${{ github.event.inputs.slug }}.m3u8"
+
+          echo "[TARGET] $FILE_URL"
+
+          check () {
+            code=$(curl -L -o /dev/null -s -w "%{http_code}" "$FILE_URL")
+            echo "HTTP CODE: $code"
+            [ "$code" = "200" ]
+          }
+
+          echo "[WAIT] Waiting 1 minutes for Pages propagation..."
+          sleep 60
+
+          echo "[CHECK #1]"
+          if check; then
+            echo "[SUCCESS] File exists"
+            curl -G "https://cp.ssplay.net/cf.php" \
+            --data-urlencode "type=ok" \
+            --data-urlencode "key=${{ github.event.inputs.page }}" \
+            --data-urlencode "slug=${{ github.event.inputs.slug }}"
+            exit 0
+          fi
+
+          echo "[WAIT] Still not found, wait extra 3 minutes..."
+          sleep 180
+
+          echo "[CHECK #2]"
+          if check; then
+            echo "[SUCCESS] File exists after delay"
+            exit 0
+          fi
+
+          echo "[FAIL] File still missing → mark for redeploy"
+          echo "NEED_REDEPLOY=true" >> $GITHUB_ENV
+          exit 1
+
+      - name: Deploy to Cloudflare Pages (retry – reuse encoded files)
+        if: env.NEED_REDEPLOY == 'true'
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ github.event.inputs.token }}
+          accountId: ${{ github.event.inputs.account }}
+          projectName: ${{ github.event.inputs.page }}
+          directory: ./output
+          branch: ${{ github.event.inputs.slug }}
