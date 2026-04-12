@@ -46,7 +46,7 @@ jobs:
             -map 0:v:0 \
             -map 0:a? \
             -c:v copy \
-            -c:a copy -bsf:a aac_adtstoasc \
+            -c:a aac -profile:a aac_low -ar 48000 -ac 2 -b:a 96k -bsf:a aac_adtstoasc \
             -start_number 10001 \
             -hls_time 4 \
             -hls_list_size 0 \
