@@ -32,7 +32,7 @@ jobs:
 
       - name: Download video
         run: |
-          curl -L "${{ github.event.inputs.link }}" -c copy -bsf:a aac_adtstoasc -o "${{ github.event.inputs.slug }}.mp4"
+          ffmpeg -loglevel error -y -i "${{ github.event.inputs.link }}" -c copy -bsf:a aac_adtstoasc "${{ github.event.inputs.slug }}.mp4"
 
       - name: Verify video file (size + ffprobe + wait)
         run: |
