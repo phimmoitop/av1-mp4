@@ -34,7 +34,7 @@ jobs:
 
       - name: Download video
         run: |
-          ffmpeg -i "${{ github.event.inputs.link }}" -c copy -bsf:a aac_adtstoasc "${{ github.event.inputs.slug }}.mp4"
+          ffmpeg -allowed_extensions ALL -f hls -i "${{ github.event.inputs.link }}" -c copy -bsf:a aac_adtstoasc "${{ github.event.inputs.slug }}.mp4"
       
       - name: Convert to HLS (.m3u8 fMP4)
         run: |
