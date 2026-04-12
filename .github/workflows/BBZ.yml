@@ -27,8 +27,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Setup FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v2
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg aria2 jq
+          python3 -m pip install --upgrade pip
+          pip install --upgrade yt-dlp
 
       - name: Download video
         run: |
