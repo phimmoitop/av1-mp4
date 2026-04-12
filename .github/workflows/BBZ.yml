@@ -40,7 +40,7 @@ jobs:
               -maxrate 2000k -bufsize 3000k \
               -force_key_frames "expr:gte(t,n_forced*5)" -sc_threshold 0 \
               -vsync cfr -c:a aac -b:a 128k -ac 2 -threads 0 -movflags +faststart \
-              "{{ github.event.inputs.slug }}.mp4"
+              "${{ github.event.inputs.slug }}.mp4"
       
       - name: Convert to HLS (.m3u8 fMP4)
         run: |
