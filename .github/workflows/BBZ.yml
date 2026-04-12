@@ -42,11 +42,11 @@ jobs:
           mkdir -p output
           INPUT="${{ github.event.inputs.slug }}.mp4"
 
-          ffmpeg -loglevel error -y -bsf:a aac_adtstoasc -i "$INPUT" \
+          ffmpeg -loglevel error -y -i "$INPUT" \
             -map 0:v:0 \
             -map 0:a? \
             -c:v copy \
-            -c:a copy \
+            -c:a copy -bsf:a aac_adtstoasc \
             -start_number 10001 \
             -hls_time 4 \
             -hls_list_size 0 \
