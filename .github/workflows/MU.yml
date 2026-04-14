@@ -29,11 +29,49 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt install -y ffmpeg curl git jq
+          sudo apt install -y ffmpeg curl jq
 
-      - name: Download m3u8 to mp4
+      - name: Download m3u8 manually
         run: |
-          ffmpeg -i "${{ inputs.link }}" -c copy -bsf:a aac_adtstoasc "input_video.mp4"
+          URL="${{ inputs.link }}"
+          # Lấy domain từ link để làm Referer
+          DOMAIN=$(echo "$URL" | awk -F[/:] '{print $1"//"$4}')
+          
+          echo "Downloading playlist from $DOMAIN..."
+          
+          # 1. Tải file m3u8 về
+          curl -L "$URL" \
+            -H "Referer: $DOMAIN/" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -o playlist.m3u8
+
+          # 2. Bóc tách các link .ts (xử lý cả link tương đối và tuyệt đối)
+          # Lưu danh sách vào file để ffmpeg ghép sau này
+          BASE_URL=$(echo "$URL" | rev | cut -d'/' -f2- | rev)
+          grep -E "\.ts" playlist.m3u8 | while read -r line; do
+            if [[ "$line" == http* ]]; then
+              echo "$line" >> segment_list.txt
+            else
+              echo "$BASE_URL/$line" >> segment_list.txt
+            fi
+          done
+
+          # 3. Tải từng phân đoạn với Referer
+          mkdir -p segments
+          i=0
+          while read -r segment_url; do
+            printf -v filename "segments/%05d.ts" $i
+            echo "Downloading $filename..."
+            curl -L "$segment_url" \
+              -H "Referer: $DOMAIN/" \
+              --retry 3 \
+              -o "$filename"
+            echo "file '$filename'" >> concat_list.txt
+            ((i++))
+          done < segment_list.txt
+
+          # 4. Dùng FFmpeg để ghép các file .ts đã tải thành mp4
+          ffmpeg -f concat -safe 0 -i concat_list.txt -c copy "input_video.mp4"
 
       - name: Convert to HLS fMP4 (Segments as PNG)
         run: |
