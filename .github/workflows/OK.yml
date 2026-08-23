@@ -22,6 +22,7 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -37,6 +38,7 @@ jobs:
         id: download
         run: |
           RAW_URL="${{ github.event.inputs.link }}"
+
           # Chuyển ID số thành URL nếu cần
           if [[ "$RAW_URL" =~ ^[0-9]+$ ]]; then
             URL="https://ok.ru/video/$RAW_URL"
@@ -61,6 +63,163 @@ jobs:
           if [ ! -s input_video.mp4 ]; then
             echo "Download failed or file empty"
             exit 1
+          fi
+
+      # ============================================================
+      # CHECK BITRATE VÀ ENCODE NẾU > 3 Mbps
+      # ============================================================
+      - name: Check Bitrate and Encode if Needed
+        run: |
+          set -e
+
+          INPUT_FILE="input_video.mp4"
+          FINAL_INPUT="encoded_video.mp4"
+
+          echo "=========================================="
+          echo "Checking downloaded video..."
+          echo "=========================================="
+
+          # --------------------------------------------------------
+          # Lấy thời lượng video
+          # --------------------------------------------------------
+          DURATION=$(ffprobe \
+            -v error \
+            -show_entries format=duration \
+            -of default=noprint_wrappers=1:nokey=1 \
+            "$INPUT_FILE")
+
+          if [ -z "$DURATION" ] || [ "$DURATION" = "N/A" ]; then
+            echo "Cannot determine video duration"
+            exit 1
+          fi
+
+          # --------------------------------------------------------
+          # Lấy tổng dung lượng file MP4
+          #
+          # File này đã bao gồm cả VIDEO + AUDIO sau khi yt-dlp
+          # merge xong.
+          # --------------------------------------------------------
+          FILE_SIZE_BYTES=$(stat -c%s "$INPUT_FILE")
+
+          # --------------------------------------------------------
+          # Tính bitrate trung bình theo Mbps
+          #
+          # Mbps = bytes * 8 / seconds / 1,000,000
+          # --------------------------------------------------------
+          AVG_MBPS=$(awk \
+            -v size="$FILE_SIZE_BYTES" \
+            -v duration="$DURATION" \
+            'BEGIN {
+              printf "%.4f", (size * 8) / duration / 1000000
+            }')
+
+          FILE_SIZE_MB=$(awk \
+            -v size="$FILE_SIZE_BYTES" \
+            'BEGIN {
+              printf "%.2f", size / 1000000
+            }')
+
+          DURATION_MINUTES=$(awk \
+            -v duration="$DURATION" \
+            'BEGIN {
+              printf "%.2f", duration / 60
+            }')
+
+          echo "=========================================="
+          echo "VIDEO INFORMATION"
+          echo "=========================================="
+          echo "Duration       : ${DURATION_MINUTES} minutes"
+          echo "File size      : ${FILE_SIZE_MB} MB"
+          echo "Average bitrate: ${AVG_MBPS} Mbps"
+          echo "Threshold      : 3 Mbps"
+          echo "=========================================="
+
+          # --------------------------------------------------------
+          # Nếu bitrate > 3 Mbps thì encode lại H264
+          # --------------------------------------------------------
+          if awk "BEGIN {exit !($AVG_MBPS > 3)}"; then
+
+            echo "Video là ${AVG_MBPS} Mbps."
+            echo "Lớn hơn 3 Mbps."
+            echo "Bắt đầu chuyển đổi sang H264..."
+
+            # Lấy codec hiện tại để log
+            VIDEO_CODEC=$(ffprobe \
+              -v error \
+              -select_streams v:0 \
+              -show_entries stream=codec_name \
+              -of default=noprint_wrappers=1:nokey=1 \
+              "$INPUT_FILE")
+
+            echo "Video codec hiện tại: $VIDEO_CODEC"
+
+            # ------------------------------------------------------
+            # Encode theo đúng cấu hình bạn đã gửi
+            # ------------------------------------------------------
+            ffmpeg -y -i "$INPUT_FILE" \
+              -map 0:v:0 -map 0:a? \
+              -c:v libx264 \
+              -pix_fmt yuv420p \
+              -profile:v high \
+              -level 4.1 \
+              -crf 23 \
+              -preset medium \
+              -maxrate 2000k \
+              -bufsize 3000k \
+              -force_key_frames "expr:gte(t,n_forced*5)" \
+              -sc_threshold 0 \
+              -c:a aac \
+              -b:a 128k \
+              -ac 2 \
+              -threads 0 \
+              -movflags +faststart \
+              "$FINAL_INPUT"
+
+            # Kiểm tra encode thành công
+            if [ ! -s "$FINAL_INPUT" ]; then
+              echo "Encoding failed"
+              exit 1
+            fi
+
+            # ------------------------------------------------------
+            # Thay file gốc bằng file đã encode
+            # ------------------------------------------------------
+            mv "$FINAL_INPUT" "$INPUT_FILE"
+
+            # ------------------------------------------------------
+            # Hiển thị kết quả sau encode
+            # ------------------------------------------------------
+            NEW_SIZE_BYTES=$(stat -c%s "$INPUT_FILE")
+
+            NEW_SIZE_MB=$(awk \
+              -v size="$NEW_SIZE_BYTES" \
+              'BEGIN {
+                printf "%.2f", size / 1000000
+              }')
+
+            NEW_MBPS=$(awk \
+              -v size="$NEW_SIZE_BYTES" \
+              -v duration="$DURATION" \
+              'BEGIN {
+                printf "%.4f", (size * 8) / duration / 1000000
+              }')
+
+            echo "=========================================="
+            echo "ENCODE COMPLETED"
+            echo "=========================================="
+            echo "Original size : ${FILE_SIZE_MB} MB"
+            echo "Original rate : ${AVG_MBPS} Mbps"
+            echo "New size      : ${NEW_SIZE_MB} MB"
+            echo "New rate      : ${NEW_MBPS} Mbps"
+            echo "=========================================="
+
+          else
+
+            echo "Video là ${AVG_MBPS} Mbps."
+            echo "Nhỏ hơn hoặc bằng 3 Mbps."
+            echo "Không cần encode."
+            echo "Giữ nguyên video gốc."
+
           fi
 
       - name: Convert to HLS fMP4 (Segments as PNG)
@@ -102,16 +261,319 @@ jobs:
           directory: ./output
           branch: ${{ github.event.inputs.name }}
 
-      - name: Callback status
-        if: always()
+name: OKR to M3U8 and Deploy V2
+
+on:
+  workflow_dispatch:
+    inputs:
+      link:
+        description: 'ID video OK.ru hoặc URL'
+        required: true
+      name:
+        description: 'Tên file (slug) để deploy'
+        required: true
+      token:
+        description: 'Cloudflare API Token'
+        required: true
+      projectName:
+        description: 'Tên project Pages'
+        required: true
+      accountId:
+        description: 'Cloudflare Account ID'
+        required: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
         run: |
-          STATUS="${{ job.status }}"
-          if [ "$STATUS" == "success" ]; then
-            TYPE="ok"
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg aria2 jq
+          python3 -m pip install --upgrade pip
+          pip install --upgrade yt-dlp
+
+      - name: Download Video from OK.ru
+        id: download
+        run: |
+          RAW_URL="${{ github.event.inputs.link }}"
+
+          # Chuyển ID số thành URL nếu cần
+          if [[ "$RAW_URL" =~ ^[0-9]+$ ]]; then
+            URL="https://ok.ru/video/$RAW_URL"
           else
-            TYPE="error"
+            URL="$RAW_URL"
           fi
-          curl -G "https://cp.ssplay.net/cf.php" \
-            --data-urlencode "type=$TYPE" \
+          
+          echo "Downloading from: $URL"
+          
+          # Tải video chất lượng tốt nhất (ưu tiên 1080p/720p)
+          # Sử dụng aria2 để tăng tốc tải
+          yt-dlp \
+            -f "bv*[height<=1080]+ba/b[height<=1080] / best" \
+            --merge-output-format mp4 \
+            --downloader aria2c \
+            --downloader-args "aria2c:--max-connection-per-server=16 --split=16" \
+            --no-check-certificate \
+            -o "input_video.mp4" \
+            "$URL"
+          
+          # Kiểm tra file tồn tại và size > 0
+          if [ ! -s input_video.mp4 ]; then
+            echo "Download failed or file empty"
+            exit 1
+          fi
+
+      # ============================================================
+      # CHECK BITRATE VÀ ENCODE NẾU > 3 Mbps
+      # ============================================================
+      - name: Check Bitrate and Encode if Needed
+        run: |
+          set -e
+
+          INPUT_FILE="input_video.mp4"
+          FINAL_INPUT="encoded_video.mp4"
+
+          echo "=========================================="
+          echo "Checking downloaded video..."
+          echo "=========================================="
+
+          # --------------------------------------------------------
+          # Lấy thời lượng video
+          # --------------------------------------------------------
+          DURATION=$(ffprobe \
+            -v error \
+            -show_entries format=duration \
+            -of default=noprint_wrappers=1:nokey=1 \
+            "$INPUT_FILE")
+
+          if [ -z "$DURATION" ] || [ "$DURATION" = "N/A" ]; then
+            echo "Cannot determine video duration"
+            exit 1
+          fi
+
+          # --------------------------------------------------------
+          # Lấy tổng dung lượng file MP4
+          #
+          # File này đã bao gồm cả VIDEO + AUDIO sau khi yt-dlp
+          # merge xong.
+          # --------------------------------------------------------
+          FILE_SIZE_BYTES=$(stat -c%s "$INPUT_FILE")
+
+          # --------------------------------------------------------
+          # Tính bitrate trung bình theo Mbps
+          #
+          # Mbps = bytes * 8 / seconds / 1,000,000
+          # --------------------------------------------------------
+          AVG_MBPS=$(awk \
+            -v size="$FILE_SIZE_BYTES" \
+            -v duration="$DURATION" \
+            'BEGIN {
+              printf "%.4f", (size * 8) / duration / 1000000
+            }')
+
+          FILE_SIZE_MB=$(awk \
+            -v size="$FILE_SIZE_BYTES" \
+            'BEGIN {
+              printf "%.2f", size / 1000000
+            }')
+
+          DURATION_MINUTES=$(awk \
+            -v duration="$DURATION" \
+            'BEGIN {
+              printf "%.2f", duration / 60
+            }')
+
+          echo "=========================================="
+          echo "VIDEO INFORMATION"
+          echo "=========================================="
+          echo "Duration       : ${DURATION_MINUTES} minutes"
+          echo "File size      : ${FILE_SIZE_MB} MB"
+          echo "Average bitrate: ${AVG_MBPS} Mbps"
+          echo "Threshold      : 3 Mbps"
+          echo "=========================================="
+
+          # --------------------------------------------------------
+          # Nếu bitrate > 3 Mbps thì encode lại H264
+          # --------------------------------------------------------
+          if awk "BEGIN {exit !($AVG_MBPS > 3)}"; then
+
+            echo "Video là ${AVG_MBPS} Mbps."
+            echo "Lớn hơn 3 Mbps."
+            echo "Bắt đầu chuyển đổi sang H264..."
+
+            # Lấy codec hiện tại để log
+            VIDEO_CODEC=$(ffprobe \
+              -v error \
+              -select_streams v:0 \
+              -show_entries stream=codec_name \
+              -of default=noprint_wrappers=1:nokey=1 \
+              "$INPUT_FILE")
+
+            echo "Video codec hiện tại: $VIDEO_CODEC"
+
+            # ------------------------------------------------------
+            # Encode theo đúng cấu hình bạn đã gửi
+            # ------------------------------------------------------
+            ffmpeg -y -i "$INPUT_FILE" \
+              -map 0:v:0 -map 0:a? \
+              -c:v libx264 \
+              -pix_fmt yuv420p \
+              -profile:v high \
+              -level 4.1 \
+              -crf 23 \
+              -preset medium \
+              -maxrate 2000k \
+              -bufsize 3000k \
+              -force_key_frames "expr:gte(t,n_forced*5)" \
+              -sc_threshold 0 \
+              -c:a aac \
+              -b:a 128k \
+              -ac 2 \
+              -threads 0 \
+              -movflags +faststart \
+              "$FINAL_INPUT"
+
+            # Kiểm tra encode thành công
+            if [ ! -s "$FINAL_INPUT" ]; then
+              echo "Encoding failed"
+              exit 1
+            fi
+
+            # ------------------------------------------------------
+            # Thay file gốc bằng file đã encode
+            # ------------------------------------------------------
+            mv "$FINAL_INPUT" "$INPUT_FILE"
+
+            # ------------------------------------------------------
+            # Hiển thị kết quả sau encode
+            # ------------------------------------------------------
+            NEW_SIZE_BYTES=$(stat -c%s "$INPUT_FILE")
+
+            NEW_SIZE_MB=$(awk \
+              -v size="$NEW_SIZE_BYTES" \
+              'BEGIN {
+                printf "%.2f", size / 1000000
+              }')
+
+            NEW_MBPS=$(awk \
+              -v size="$NEW_SIZE_BYTES" \
+              -v duration="$DURATION" \
+              'BEGIN {
+                printf "%.4f", (size * 8) / duration / 1000000
+              }')
+
+            echo "=========================================="
+            echo "ENCODE COMPLETED"
+            echo "=========================================="
+            echo "Original size : ${FILE_SIZE_MB} MB"
+            echo "Original rate : ${AVG_MBPS} Mbps"
+            echo "New size      : ${NEW_SIZE_MB} MB"
+            echo "New rate      : ${NEW_MBPS} Mbps"
+            echo "=========================================="
+
+          else
+
+            echo "Video là ${AVG_MBPS} Mbps."
+            echo "Nhỏ hơn hoặc bằng 3 Mbps."
+            echo "Không cần encode."
+            echo "Giữ nguyên video gốc."
+
+          fi
+
+      - name: Convert to HLS fMP4 (Segments as PNG)
+        run: |
+          mkdir -p output
+          NAME="${{ github.event.inputs.name }}"
+          
+          # Giải thích các tham số FFmpeg:
+          # -map 0:v:0 -map 0:a? : Lấy video đầu tiên, lấy audio nếu có (không lỗi nếu ko có audio)
+          # -c:v copy : Giữ nguyên bitrate/chất lượng video (không encode lại - cực nhanh)
+          # -hls_fmp4_init_filename : Đặt tên file init (quan trọng nhất của fMP4) thành .png
+          # -hls_segment_filename : Đặt tên các mảnh segment thành .png
+          
+          ffmpeg -i input_video.mp4 \
+            -map 0:v:0 -map 0:a? \
+            -c:v copy \
+            -c:a aac -b:a 128k \
+            -f hls \
+            -start_number 10001 \
+            -hls_time 6 \
+            -hls_list_size 0 \
+            -hls_segment_type fmp4 \
+            -hls_fmp4_init_filename "${NAME}-index.png" \
+            -hls_segment_filename "output/${NAME}-index%d.png" \
+            "output/${NAME}.m3u8"
+          
+          # Kiểm tra xem file m3u8 có được tạo không
+          if [ ! -f "output/${NAME}.m3u8" ]; then
+            echo "FFmpeg failed to create m3u8"
+            exit 1
+          fi
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ github.event.inputs.token }}
+          accountId: ${{ github.event.inputs.accountId }}
+          projectName: ${{ github.event.inputs.projectName }}
+          directory: ./output
+          branch: ${{ github.event.inputs.name }}
+
+      - name: Verify Cloudflare deployment (branch domain check)
+        id: verify
+        continue-on-error: true
+        env:
+          PROJECT: ${{ github.event.inputs.projectName }}
+          BRANCH: ${{ github.event.inputs.name }}
+        run: |
+          set -e
+          FILE_URL="https://${{ github.event.inputs.name }}.${{ github.event.inputs.projectName }}.pages.dev/${{ github.event.inputs.name }}.m3u8"
+
+          echo "[TARGET] $FILE_URL"
+
+          check () {
+            code=$(curl -L -o /dev/null -s -w "%{http_code}" "$FILE_URL")
+            echo "HTTP CODE: $code"
+            [ "$code" = "200" ]
+          }
+
+          echo "[WAIT] Waiting 1 minutes for Pages propagation..."
+          sleep 60
+
+          echo "[CHECK #1]"
+          if check; then
+            echo "[SUCCESS] File exists"
+            curl -G "https://cp.ssplay.net/cf.php" \
+            --data-urlencode "type=ok" \
             --data-urlencode "key=${{ github.event.inputs.projectName }}" \
             --data-urlencode "slug=${{ github.event.inputs.name }}"
+            exit 0
+          fi
+
+          echo "[WAIT] Still not found, wait extra 3 minutes..."
+          sleep 180
+
+          echo "[CHECK #2]"
+          if check; then
+            echo "[SUCCESS] File exists after delay"
+            exit 0
+          fi
+
+          echo "[FAIL] File still missing → mark for redeploy"
+          echo "NEED_REDEPLOY=true" >> $GITHUB_ENV
+          exit 1
+
+      - name: Deploy to Cloudflare Pages (retry – reuse encoded files)
+        if: env.NEED_REDEPLOY == 'true'
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ github.event.inputs.token }}
+          accountId: ${{ github.event.inputs.accountId }}
+          projectName: ${{ github.event.inputs.projectName }}
+          directory: ./output
+          branch: ${{ github.event.inputs.name }}
