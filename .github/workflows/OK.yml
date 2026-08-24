@@ -165,7 +165,7 @@ jobs:
               -crf 23 \
               -preset medium \
               -maxrate 2000k \
-              -bufsize 3000k \
+              -bufsize 3500k \
               -force_key_frames "expr:gte(t,n_forced*5)" \
               -sc_threshold 0 \
               -c:a aac \
