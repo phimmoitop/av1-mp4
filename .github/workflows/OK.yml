@@ -226,31 +226,41 @@ jobs:
           # Chạy script, lấy dòng kết quả cuối cùng (VD: "MP4:https://..." hoặc "HLS:https://...")
           RESULT=$(python3 okru_extract.py "$URL" --max-height 1080 --verbose)
           echo "$RESULT"
-
+ 
           LAST_LINE=$(echo "$RESULT" | tail -1)
           KIND="${LAST_LINE%%:*}"
           VIDEO_URL="${LAST_LINE#*:}"
-
+ 
           if [ -z "$VIDEO_URL" ]; then
             echo "Khong lay duoc link video truc tiep."
             exit 1
           fi
-
+ 
           echo "Loai link: $KIND"
           echo "Video URL: $VIDEO_URL"
-
+ 
+          # CDN của OK.ru (okcdn.ru) kiểm tra User-Agent/Referer để chống hotlink,
+          # nên phải gửi kèm header giống lúc tải trang HTML, nếu không sẽ bị 400.
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+ 
           if [ "$KIND" = "HLS" ]; then
             # Link .m3u8 -> dùng ffmpeg để tải/ghép luôn thành mp4
-            ffmpeg -y -i "$VIDEO_URL" -c copy input_video.mp4
+            ffmpeg -y \
+              -user_agent "$UA" \
+              -headers "Referer: $URL"$'\r\n' \
+              -i "$VIDEO_URL" -c copy input_video.mp4
           else
             # Link .mp4 trực tiếp -> dùng aria2c tải đa luồng cho nhanh
             aria2c \
+              --header="User-Agent: $UA" \
+              --header="Referer: $URL" \
+              --header="Accept: */*" \
               --max-connection-per-server=16 \
               --split=16 \
               --out=input_video.mp4 \
               "$VIDEO_URL"
           fi
-
+ 
           # Kiểm tra file tồn tại và size > 0
           if [ ! -s input_video.mp4 ]; then
             echo "Download failed or file empty"
