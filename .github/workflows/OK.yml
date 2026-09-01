@@ -32,7 +32,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg aria2 jq
           python3 -m pip install --upgrade pip
-          pip install --upgrade yt-dlp
+          # Thử bản nightly trước - có fix mới nhất cho các site bị đổi cấu trúc
+          python3 -m pip install -U --pre "yt-dlp[default]" || python3 -m pip install --upgrade yt-dlp
 
       - name: Download Video from OK.ru
         id: download
