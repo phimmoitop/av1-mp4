@@ -32,12 +32,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg aria2 jq
           python3 -m pip install --upgrade pip
-          # Thử bản nightly trước - có fix mới nhất cho các site bị đổi cấu trúc
-          python3 -m pip install -U --pre "yt-dlp[default]" || python3 -m pip install --upgrade yt-dlp
+          python3 -m pip install --upgrade requests --break-system-packages
 
       - name: Download Video from OK.ru
         id: download
         run: |
+          set -e
+
           RAW_URL="${{ github.event.inputs.link }}"
 
           # Chuyển ID số thành URL nếu cần
@@ -46,20 +47,210 @@ jobs:
           else
             URL="$RAW_URL"
           fi
-          
+
           echo "Downloading from: $URL"
+
+          # ------------------------------------------------------------
+          # Script trích xuất link video trực tiếp từ OK.ru (không phụ
+          # thuộc yt-dlp). Ghi ra file tạm rồi chạy.
+          # ------------------------------------------------------------
+          cat > okru_extract.py << 'PYEOF'
+          #!/usr/bin/env python3
+          import argparse
+          import html
+          import json
+          import re
+          import sys
+          from urllib.parse import unquote
           
-          # Tải video chất lượng tốt nhất (ưu tiên 1080p/720p)
-          # Sử dụng aria2 để tăng tốc tải
-          yt-dlp \
-            -f "bv*[height<=1080]+ba/b[height<=1080] / best" \
-            --merge-output-format mp4 \
-            --downloader aria2c \
-            --downloader-args "aria2c:--max-connection-per-server=16 --split=16" \
-            --no-check-certificate \
-            -o "input_video.mp4" \
-            "$URL"
+          import requests
           
+          QUALITY_HEIGHT = {
+              "ultra": 2160, "quad": 1440, "full": 1080, "hd": 720,
+              "sd": 480, "low": 360, "lowest": 240, "mobile": 144,
+          }
+          
+          DEFAULT_HEADERS = {
+              "User-Agent": (
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+              ),
+              "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+          }
+          
+          
+          def extract_id(url_or_id):
+              if url_or_id.isdigit():
+                  return url_or_id
+              m = re.search(r"(?:video|videoembed)/([\d-]+)", url_or_id)
+              if not m:
+                  raise ValueError(f"Khong tim thay ID video trong: {url_or_id}")
+              return m.group(1)
+          
+          
+          def maybe_parse_json(value, label="metadata"):
+              if isinstance(value, (dict, list)):
+                  return value
+              if isinstance(value, (str, bytes, bytearray)):
+                  return json.loads(value)
+              raise TypeError(f"Khong the parse {label}: kieu du lieu khong xac dinh {type(value)}")
+          
+          
+          def fetch_desktop_metadata(video_id, cookies=None, verbose=False):
+              url = f"https://ok.ru/video/{video_id}"
+              headers = dict(DEFAULT_HEADERS)
+              if cookies:
+                  headers["Cookie"] = cookies
+              if verbose:
+                  print(f"[*] Dang tai trang: {url}", file=sys.stderr)
+          
+              resp = requests.get(url, headers=headers, timeout=30)
+              resp.raise_for_status()
+              webpage = resp.text
+          
+              m = re.search(r'data-options=(["\'])(?P<opts>\{.+?\})\1', webpage)
+              if not m:
+                  m = re.search(r'data-options="(?P<opts>[^"]+)"', webpage)
+              if not m:
+                  raise RuntimeError(
+                      "Khong tim thay 'data-options' trong HTML. OK.ru co the da doi "
+                      "cau truc trang, hoac trang tra ve loi (dang nhap/khoa vung/chan IP)."
+                  )
+          
+              raw_opts = html.unescape(m.group("opts"))
+              player = maybe_parse_json(raw_opts, "player data-options")
+          
+              if isinstance(player, dict) and player.get("isExternalPlayer") and player.get("url"):
+                  return {"external_player_url": player["url"], "videos": []}
+          
+              flashvars = player.get("flashvars", player) if isinstance(player, dict) else player
+              metadata_field = flashvars.get("metadata") if isinstance(flashvars, dict) else None
+          
+              if metadata_field:
+                  metadata = maybe_parse_json(metadata_field, "metadata (inline)")
+              else:
+                  metadata_url = flashvars.get("metadataUrl") if isinstance(flashvars, dict) else None
+                  if not metadata_url:
+                      raise RuntimeError("Khong tim thay 'metadata' hoac 'metadataUrl' trong flashvars.")
+                  post_data = {}
+                  location = flashvars.get("location")
+                  if location:
+                      post_data["st.location"] = location
+                  if verbose:
+                      print(f"[*] Dang tai metadata JSON tu: {unquote(metadata_url)}", file=sys.stderr)
+                  resp2 = requests.post(unquote(metadata_url), data=post_data, headers=headers, timeout=30)
+                  resp2.raise_for_status()
+                  metadata = maybe_parse_json(resp2.text, "metadata (remote)")
+          
+              return metadata
+          
+          
+          def fetch_mobile_fallback(video_id, verbose=False):
+              url = f"https://m.ok.ru/video/{video_id}"
+              if verbose:
+                  print(f"[*] Thu trang mobile: {url}", file=sys.stderr)
+              resp = requests.get(url, headers=DEFAULT_HEADERS, timeout=30)
+              resp.raise_for_status()
+              webpage = resp.text
+          
+              m = re.search(r'data-video="(.+?)"', webpage)
+              if not m:
+                  raise RuntimeError("Khong tim thay data-video tren trang mobile.")
+              data = maybe_parse_json(html.unescape(m.group(1)), "mobile data-video")
+          
+              return {
+                  "movie": {"title": data.get("videoName")},
+                  "videos": [{"name": "mobile", "url": data.get("videoSrc")}] if data.get("videoSrc") else [],
+              }
+          
+          
+          def pick_best_format(videos, max_height):
+              candidates = []
+              for f in videos:
+                  name = f.get("name")
+                  url = f.get("url")
+                  if not url:
+                      continue
+                  height = QUALITY_HEIGHT.get(name, 0)
+                  candidates.append((height, name, url))
+          
+              eligible = [c for c in candidates if 0 < c[0] <= max_height]
+              if eligible:
+                  eligible.sort(key=lambda c: c[0], reverse=True)
+                  return eligible[0]
+              if candidates:
+                  candidates.sort(key=lambda c: c[0])
+                  return candidates[0]
+              return None
+          
+          
+          def main():
+              parser = argparse.ArgumentParser()
+              parser.add_argument("url_or_id")
+              parser.add_argument("--max-height", type=int, default=1080)
+              parser.add_argument("--cookies", default=None)
+              parser.add_argument("--verbose", action="store_true")
+              args = parser.parse_args()
+          
+              video_id = extract_id(args.url_or_id)
+          
+              try:
+                  metadata = fetch_desktop_metadata(video_id, cookies=args.cookies, verbose=args.verbose)
+              except Exception as e:
+                  print(f"[!] Loi khi lay du lieu tu trang desktop: {e}", file=sys.stderr)
+                  print("[*] Dang thu phuong an du phong (trang mobile)...", file=sys.stderr)
+                  metadata = fetch_mobile_fallback(video_id, verbose=args.verbose)
+          
+              if "external_player_url" in metadata:
+                  print(f"EXTERNAL:{metadata['external_player_url']}")
+                  return
+          
+              videos = metadata.get("videos", [])
+              hls = metadata.get("hlsManifestUrl") or metadata.get("hlsMasterPlaylistUrl")
+          
+              best = pick_best_format(videos, args.max_height)
+              if best:
+                  _, name, url = best
+                  print(f"MP4:{url}")
+              elif hls:
+                  print(f"HLS:{hls}")
+              else:
+                  print("[!] Khong tim thay format nao co the tai duoc.", file=sys.stderr)
+                  sys.exit(2)
+          
+          
+          if __name__ == "__main__":
+              main()
+          PYEOF
+
+          # Chạy script, lấy dòng kết quả cuối cùng (VD: "MP4:https://..." hoặc "HLS:https://...")
+          RESULT=$(python3 okru_extract.py "$URL" --max-height 1080 --verbose)
+          echo "$RESULT"
+
+          LAST_LINE=$(echo "$RESULT" | tail -1)
+          KIND="${LAST_LINE%%:*}"
+          VIDEO_URL="${LAST_LINE#*:}"
+
+          if [ -z "$VIDEO_URL" ]; then
+            echo "Khong lay duoc link video truc tiep."
+            exit 1
+          fi
+
+          echo "Loai link: $KIND"
+          echo "Video URL: $VIDEO_URL"
+
+          if [ "$KIND" = "HLS" ]; then
+            # Link .m3u8 -> dùng ffmpeg để tải/ghép luôn thành mp4
+            ffmpeg -y -i "$VIDEO_URL" -c copy input_video.mp4
+          else
+            # Link .mp4 trực tiếp -> dùng aria2c tải đa luồng cho nhanh
+            aria2c \
+              --max-connection-per-server=16 \
+              --split=16 \
+              --out=input_video.mp4 \
+              "$VIDEO_URL"
+          fi
+
           # Kiểm tra file tồn tại và size > 0
           if [ ! -s input_video.mp4 ]; then
             echo "Download failed or file empty"
