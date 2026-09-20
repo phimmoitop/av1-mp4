@@ -458,7 +458,7 @@ jobs:
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ github.event.inputs.token }}
-          accountId: ${{ github.event.inputs.account }}
+          accountId: ${{ github.event.inputs.accountId }}
           command: pages deploy ./output --project-name=${{ github.event.inputs.projectName }} --branch=${{ github.event.inputs.name }}
 
       - name: Verify Cloudflare deployment (branch domain check)
@@ -510,5 +510,5 @@ jobs:
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ github.event.inputs.token }}
-          accountId: ${{ github.event.inputs.account }}
+          accountId: ${{ github.event.inputs.accountId }}
           command: pages deploy ./output --project-name=${{ github.event.inputs.projectName }} --branch=${{ github.event.inputs.name }}
