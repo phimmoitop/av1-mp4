@@ -116,13 +116,11 @@ jobs:
           fi
 
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/pages-action@v1
+        uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ github.event.inputs.token }}
           accountId: ${{ github.event.inputs.accountId }}
-          projectName: ${{ github.event.inputs.projectName }}
-          directory: ./output
-          branch: ${{ github.event.inputs.name }}
+          command: pages deploy ./output --project-name=${{ github.event.inputs.projectName }} --branch=${{ github.event.inputs.name }}
 
       # Callback khi thành công
       - name: Callback success
